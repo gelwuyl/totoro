@@ -1,0 +1,67 @@
+{
+  "generatedAt": "2026-08-28T20:34:30Z",
+  "drawsAnalyzed": 434,
+  "sweepDaysExcluded": "schema flag; excluded by loader",
+  "trainWindow": 150,
+  "testSteps": 374,
+  "battery": [
+    {
+      "name": "frequency",
+      "walkForward": true,
+      "baseline": "uniform",
+      "metric": {
+        "metricName": "log-loss",
+        "model": 2.35187,
+        "baseline": 2.30259
+      },
+      "liftPct": -2.141,
+      "accuracy": 0.09826,
+      "chanceAccuracy": 0.1,
+      "calibration": {
+        "ece": 0.10345
+      },
+      "fdrQ": 0.18564,
+      "verdict": "no-edge"
+    },
+    {
+      "name": "markov",
+      "walkForward": true,
+      "baseline": "uniform",
+      "metric": {
+        "metricName": "log-loss",
+        "model": 2.40244,
+        "baseline": 2.30259
+      },
+      "liftPct": -4.336,
+      "accuracy": 0.16644,
+      "chanceAccuracy": 0.1,
+      "calibration": {
+        "ece": 0.08274
+      },
+      "fdrQ": 0.0,
+      "verdict": "no-edge"
+    },
+    {
+      "name": "mlp",
+      "walkForward": true,
+      "baseline": "uniform",
+      "metric": {
+        "metricName": "log-loss",
+        "model": 5.3347,
+        "baseline": 2.30259
+      },
+      "liftPct": -131.683,
+      "accuracy": 0.11898,
+      "chanceAccuracy": 0.1,
+      "calibration": {
+        "ece": 0.05353
+      },
+      "fdrQ": 0.0,
+      "verdict": "no-edge"
+    }
+  ],
+  "overall": {
+    "verdict": "no-edge",
+    "note": "No model predicts 4D. The expected return per $1 stays Big 65.9\u00a2 / Small 58.0\u00a2 regardless of this report."
+  }
+}
