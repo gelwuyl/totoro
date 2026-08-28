@@ -28,6 +28,8 @@ jobs:
 
       - name: Regenerate CSV + JSON (auto-backfill on first run)
         run: |
+          # optional: enables the Chrome-TLS impersonation fetch fallback
+          pip install --quiet curl_cffi || echo "curl_cffi unavailable - urllib only"
           if [ -f public/4d_official.csv ]; then
             rows=$(($(wc -l < public/4d_official.csv) - 1))
           else

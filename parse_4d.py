@@ -46,6 +46,7 @@ Usage
 import argparse
 import base64
 import csv
+import http.cookiejar
 import json
 import os
 import re
@@ -55,6 +56,24 @@ import urllib.request
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 PAGE = "https://www.singaporepools.com.sg/en/4d/Pages/Results.aspx"
+
+# CI runners receive HTTP 200 with NO result markup from /en/4d/ (the TOTO
+# page serves fine to the same IPs — the site applies per-path bot rules).
+# Fetch chain: full browser headers + cookie jar first, then curl_cffi with
+# Chrome TLS impersonation if the package is installed (the CI workflow
+# pip-installs it). Locally the first strategy typically succeeds.
+HEADERS = {
+    "User-Agent": UA,
+    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+               "image/avif,image/webp,*/*;q=0.8"),
+    "Accept-Language": "en-SG,en;q=0.9",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+_opener = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+_curl_session = None
+_logged_strategies = set()
 
 CSV_HEADER = (["drawNo", "date", "isSweepDay", "d1st", "d2nd", "d3rd"]
               + [f"s{i}" for i in range(1, 11)] + [f"c{i}" for i in range(1, 11)])
@@ -66,12 +85,50 @@ second_re = re.compile(r"tdSecondPrize'>(\d{4})<")
 third_re = re.compile(r"tdThirdPrize'>(\d{4})<")
 
 
+def _fetch_urllib(url):
+    req = urllib.request.Request(url, headers=HEADERS)
+    with _opener.open(req, timeout=30) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def _fetch_curl(url):
+    global _curl_session
+    if _curl_session is None:
+        from curl_cffi import requests as creq
+        _curl_session = creq.Session(impersonate="chrome")
+    r = _curl_session.get(url, headers=HEADERS, timeout=30)
+    r.raise_for_status()
+    return r.text
+
+
+def _has_result_markup(html):
+    return "drawDate'>" in html and "tdFirstPrize'>" in html
+
+
 def fetch_html(draw):
     tok = base64.b64encode(f"DrawNumber={draw}".encode()).decode()
     url = PAGE + ("?sppl=" + tok if draw else "")
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read().decode("utf-8", "replace")
+    strategies = [("urllib+cookies", _fetch_urllib)]
+    try:
+        import curl_cffi  # noqa: F401
+        strategies.append(("curl_cffi-chrome", _fetch_curl))
+    except ImportError:
+        pass
+    problems = []
+    for name, fn in strategies:
+        try:
+            html = fn(url)
+        except Exception as e:
+            problems.append(f"{name}: {e!r}")
+            continue
+        if _has_result_markup(html):
+            if name not in _logged_strategies:
+                print(f"  fetch strategy in use: {name}")
+                _logged_strategies.add(name)
+            return html
+        problems.append(f"{name}: HTTP 200 but no result markup "
+                        f"(head {html[:200]!r})")
+    raise ValueError("; ".join(problems))
 
 
 def cell_numbers(section):
