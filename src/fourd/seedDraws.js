@@ -1,0 +1,30 @@
+// Build-time snapshot of public/4d_official.json (draws 5513–5518), shared by
+// the 4D UI (embed fallback) and the Node engine harness (test data). The
+// isSweepDay flag is a schema field in the database (authoritative there);
+// this embed mirrors it and must stay in sync until the fetch-merge lands.
+export const FOURD_SEED_DRAWS = [
+  { drawNo: 5518, date: '05 Aug 2026', isSweepDay: true,
+    '1st': '0715', '2nd': '0901', '3rd': '5730',
+    starter: ['2093', '3317', '4188', '4305', '5910', '6717', '6786', '8903', '9201', '9807'],
+    consolation: ['1833', '4070', '4685', '6299', '7535', '7673', '7943', '8292', '8766', '9530'] },
+  { drawNo: 5517, date: '02 Aug 2026', isSweepDay: false,
+    '1st': '3052', '2nd': '7038', '3rd': '2268',
+    starter: ['0051', '0766', '2875', '5068', '6347', '6367', '7934', '8842', '8955', '9857'],
+    consolation: ['0179', '0962', '1071', '1448', '1823', '2571', '2908', '4025', '5864', '7278'] },
+  { drawNo: 5516, date: '01 Aug 2026', isSweepDay: false,
+    '1st': '5964', '2nd': '0462', '3rd': '0631',
+    starter: ['2182', '2596', '2869', '3167', '5565', '5739', '5843', '6308', '7502', '9040'],
+    consolation: ['0267', '1692', '4108', '5810', '6750', '8001', '8632', '8675', '9562', '9955'] },
+  { drawNo: 5515, date: '29 Jul 2026', isSweepDay: false,
+    '1st': '8813', '2nd': '1641', '3rd': '0173',
+    starter: ['1237', '1382', '1591', '2643', '4038', '4074', '4799', '5033', '6846', '8758'],
+    consolation: ['0089', '1350', '2960', '3596', '3831', '5645', '7554', '7624', '8346', '9512'] },
+  { drawNo: 5514, date: '26 Jul 2026', isSweepDay: false,
+    '1st': '6431', '2nd': '2067', '3rd': '4836',
+    starter: ['3337', '4586', '4883', '5773', '6170', '6689', '9238', '9415', '9728', '9811'],
+    consolation: ['0389', '0766', '1136', '2220', '2636', '3769', '3792', '4567', '5597', '9627'] },
+  { drawNo: 5513, date: '25 Jul 2026', isSweepDay: false,
+    '1st': '5131', '2nd': '4814', '3rd': '3970',
+    starter: ['1546', '1612', '1794', '1980', '3106', '3647', '4760', '5762', '6538', '7224'],
+    consolation: ['0932', '1077', '3977', '4522', '6473', '6948', '7116', '8558', '8590', '8965'] },
+];

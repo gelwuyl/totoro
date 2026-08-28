@@ -2,3 +2,13 @@ node_modules
 dist
 *.local
 .DS_Store
+
+# Local working files — never ship
+HANDOFF.md
+HANDOFF.md.backup-*
+.claude/
+/4d_official.csv
+/4d_official.json
+/4d_raw.md
+/cny.html
+/ui-local-preview/

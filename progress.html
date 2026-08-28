@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Build Progress — SG Pools Analyzer</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background: #020617; color: #e2e8f0; font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; padding: 2rem 1rem; }
+  .wrap { max-width: 56rem; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+  h1 span { background: linear-gradient(90deg,#60a5fa,#818cf8,#34d399); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .sub { color: #64748b; font-size: .85rem; margin-bottom: 2rem; }
+  .phase { background: #0f172ae6; border: 1px solid #1e293b; border-radius: 1rem; padding: 1.1rem 1.25rem; margin-bottom: .9rem; }
+  .phase h2 { font-size: 1rem; margin: 0; display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+  .phase p { color: #94a3b8; font-size: .85rem; margin: .5rem 0 0; line-height: 1.55; }
+  .tag { font-size: .65rem; font-weight: 700; letter-spacing: .08em; padding: .2rem .6rem; border-radius: 999px; text-transform: uppercase; }
+  .done { background: #022c22; color: #34d399; border: 1px solid #065f46; }
+  .active { background: #1e1b4b; color: #a5b4fc; border: 1px solid #4338ca; }
+  .todo { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+  ul { margin: .5rem 0 0; padding-left: 1.1rem; color: #94a3b8; font-size: .82rem; line-height: 1.6; }
+  .checks { margin-top: 1.5rem; background: #0f172ae6; border: 1px solid #1e293b; border-radius: 1rem; padding: 1.1rem 1.25rem; }
+  .checks h2 { font-size: 1rem; margin: 0 0 .6rem; }
+  .checks li { list-style: none; padding-left: 1.5rem; position: relative; }
+  .checks li::before { position: absolute; left: 0; }
+  .pass::before { content: "✅"; }
+  .run::before { content: "⏳"; }
+  .wait::before { content: "⬚"; }
+  a { color: #60a5fa; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>⬡ <span>SG Pools Analyzer</span> — build progress</h1>
+  <div class="sub">One app, two games · TOTO (untouched) + 4D (new) · updated 2026-08-28 · <strong>build complete — all components critic-passed, integration verified</strong> · durable record: <a href="HANDOFF.md">HANDOFF.md</a></div>
+
+  <div class="phase">
+    <h2>Interview &amp; alignment <span class="tag done">done</span></h2>
+    <p>Grill interview complete: 12+ ratified decisions — combined app, shell shape, hash routing, 5 consolidated engine modules, 4 4D tabs, honest-prediction frame, verified constants (EV Big $0.659 / Small $0.580), sweep-day handling, guardrails. Full Decision Log in HANDOFF.md.</p>
+  </div>
+
+  <div class="phase">
+    <h2>Phase S — Shell + Home <span class="tag done">done</span></h2>
+    <p>Critic verdict: PASS, no blockers. Both SHOULD-FIXes fixed + verified: <code>isSweepDay</code> now an authoritative schema field in the data files (derivation is fallback-only), Home sort hardened, hash matching exact. All Phase S quality-bar items green.</p>
+    <ul>
+      <li>Shell bar: ⬡ SG Pools Analyzer · Home | TOTO | 4D segmented switcher</li>
+      <li>Hash routes #/home #/toto #/4d — deep-linkable, refresh-safe, back-button correct</li>
+      <li>Home dashboard: latest TOTO + 4D draws (live JSON fetch), draw counts, entry cards</li>
+      <li>4D section stub: 4-tab shell, real Records (6-draw seed, sweep-day badge on 5518), honest Phase E/U cards</li>
+      <li>TotoAnalyzer.jsx byte-untouched; regression pass green (tabs, wheeling, toggle, data)</li>
+      <li>Guardrail footer on every route (RTP facts + NCPG helpline)</li>
+    </ul>
+  </div>
+
+  <div class="phase">
+    <h2>Phase E — 4D engines <span class="tag done">CLOSED — critic PASS</span></h2>
+    <p><strong>Harness green: 126/126 assertions</strong> (<code>node scripts/test-engines.mjs</code>). Every quality-bar anchor verified: EV Big $0.659 / Small $0.580 exact · all 33 published iBet cells to the dollar · SDs 24.28 / 36.93 / 4.87 · exact hypergeometric P(any prize) 2.28% @10 / 5.38% @24 / 20.65% @100 · perm counts 24/12/12/6/4/1 · clause 2.5 enforced (iBet <em>and</em> System on one-perm numbers) · sweep-day exclusion · real-draw payout replays.</p>
+    <ul>
+      <li>betMath — perms, slip cost, payouts, EV/variance, exact P(any prize), portfolio stats</li>
+      <li>drawStats — frequencies, per-position chi-square (exact gamma p-values), number insights</li>
+      <li>budgetPlanner — max EV / max hit / min variance / max spread, never-duplicate guard</li>
+      <li>testBench — historical replay of any slip via betMath payouts (notOffered flags)</li>
+      <li>signalLab — Edge Tester report contract (walk-forward + uniform baseline + calibration + FDR mandatory)</li>
+    </ul>
+    <p><strong>Gauntlet round 1:</strong> critic FAIL with 5 findings → all fixed + regression-pinned (planner Ordinary covered-set; min_variance SD-per-dollar; clause-2.5 free-bet closed for iBet + System; ±0.7% copy; tautology) → critic re-audit <strong>PASS</strong>, findings re-verified independently with new edge probes.</p>
+  </div>
+
+  <div class="phase">
+    <h2>Phase U — 4D UI <span class="tag done">CLOSED — critic PASS</span></h2>
+    <p>The full UI over the verified engines — <strong>build clean, zero console errors desktop + 375px, UI figures = engines to the cent</strong>. Bet &amp; Planner: budget allocator hero ($10 default, 4 mode cards, candidate chips) → allocation table + portfolio stats + RTP banner → Bet Calculator (per-pool prize tables, clause-2.5 not-offered states, RTP banner) → Next Draw card (exact odds + chosen-bet next-draw price + sweep-day note + honest archive context) → Test My Numbers (replay with notOffered flags). Insights &amp; Fairness: frequency bars, chi-square verdicts with small-sample warning, "For fun — not prediction" card, Edge Tester panel (contract-enforcing, honest empty state until CI publishes a report). Records with sweep badges. Data &amp; Sync: validated 26-column CSV import (file/paste) that never drops draws, export, pipeline explainer.</p>
+    <p><strong>Gauntlet round 1:</strong> critic FAIL (2 FAIL-level + 1 spec gap + 2 SHOULD-FIX) → all fixed + regression-pinned, harness now <strong>130/130</strong>: RTP banner per-$1 loss was absolute loss mislabelled (now 1−RTP, absolute shown separately — exact at 1 and 5 draws); plan() dropped roll <em>position</em> (allocations + replay rows now carry it — end-to-end regression pays a position-3 roll $2000 on 8885); Next Draw card completed to the ratified 7-element spec; Edge Tester renderer hardened against out-of-contract fields; duplicate React keys on sweep-day chips fixed (verified with a duplicate-numbered sweep import). <strong>Re-audit: PASS</strong> — critic independently reproduced the position fix end-to-end in the real UI (imported draw #9999, 1st prize 8885 → "$70 · $2000 · #9999"), re-ran harness/build itself, and verified sweep-day cadence logic + clause-2.5 paths. One new non-blocking nit accepted (planner state resets on internal tab switch — post-v1, TOTO-consistent).</p>
+    <p>Browser re-checks after fixes: banners 34.2¢/$1 + $0.68 (plan) / $0.34 (1 draw) / $1.71 (5 draws) · allocation + replay rows read "(4th digit)" · next draw day "29 Aug 2026" from the Wed/Sat/Sun cadence · partial input "pricing 0567" hint · duplicate-number sweep card renders with zero console errors · no overflow at 375px · TOTO deep-link renders.</p>
+  </div>
+
+  <div class="phase">
+    <h2>Integration pass <span class="tag done">done</span></h2>
+    <p>Verified on the <strong>production bundle</strong> (vite preview serving dist): all 3 routes render — Home with both game cards fed by hosted JSONs (316 + 6 draws), TOTO 4 tabs, 4D 4 tabs. Zero console output anywhere; no horizontal overflow at 375px on any route. No cross-system conflicts: TotoAnalyzer.jsx byte-untouched, shared DigitBox/isSweepDay, guardrail footer on every route, accents per spec (blue = TOTO, emerald = 4D). 294.72 kB JS (84.65 gzip) · 1.2 s build · memoized replays · no render loops.</p>
+  </div>
+
+  <div class="phase">
+    <h2>Phase D — Data + CI <span class="tag todo">pipeline written; live run needs git repo</span></h2>
+    <p>parse_4d.py (incremental + full backfill 5058→5527 + --verify), refresh-4d.yml (Wed/Sat/Sun cron + Edge Tester battery step), signal_lab.py (offline walk-forward battery → 4d_signal_report.json). All written and desk-checked; the full 470-draw backfill and the live iBet-table pin run once this folder is re-initialized as a git repo and pushed (no .git locally; ad-hoc iBet fetch attempts exhausted + logged). <em>This is the one step that needs you.</em></p>
+  </div>
+
+  <div class="checks">
+    <h2>Quality bar — Phase S items</h2>
+    <ul>
+      <li class="pass">npm run build clean</li>
+      <li class="pass">All 3 routes render; hash refresh + back verified</li>
+      <li class="pass">Zero console errors (desktop + 375px)</li>
+      <li class="pass">TOTO 4-tab regression (wheeling, CSV import, includeBonus, Data &amp; Sync)</li>
+      <li class="pass">No fabricated data (4D shows its real 6-draw seed, labelled)</li>
+      <li class="pass">No predictive language in shipped copy</li>
+      <li class="pass">Fresh-context critic audit — PASS, fixes applied + verified</li>
+      <li class="pass">Engine-harness exactness — 130/130 green (roll-position regressions + clause-2.5 System pins)</li>
+      <li class="pass">Phase E critic audit — PASS (round 1 FAIL → fixed → re-verified)</li>
+      <li class="pass">UI = engines to the cent — browser-verified against engine outputs</li>
+      <li class="pass">CSV import round-trip + deep-link refresh + no overflow at 375px</li>
+      <li class="pass">Phase U critic audit — PASS (round 1 FAIL → 5 findings fixed + pinned → re-audit PASS)</li>
+      <li class="pass">Final integration pass — production bundle: all 3 routes, zero console, 375px clean</li>
+      <li class="wait">Phase D live backfill — needs git repo + push (the one step that needs you)</li>
+    </ul>
+  </div>
+</div>
+</body>
+</html>
