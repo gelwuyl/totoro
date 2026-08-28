@@ -26,8 +26,20 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Regenerate CSV + JSON
-        run: python parse_4d.py --out public
+      - name: Regenerate CSV + JSON (auto-backfill on first run)
+        run: |
+          if [ -f public/4d_official.csv ]; then
+            rows=$(($(wc -l < public/4d_official.csv) - 1))
+          else
+            rows=0
+          fi
+          if [ "$rows" -lt 50 ]; then
+            echo "Stored draws: $rows — running FULL backfill to the official archive floor (draw 5058)."
+            python parse_4d.py --out public --full
+          else
+            echo "Stored draws: $rows — incremental refresh."
+            python parse_4d.py --out public
+          fi
 
       - name: Edge Tester battery (walk-forward report)
         run: |
