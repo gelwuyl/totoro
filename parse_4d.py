@@ -32,8 +32,14 @@ Mechanism
 --------
 Each draw lives at:
   /en/4d/Pages/Results.aspx?sppl=<base64("DrawNumber=N")>
-No sppl returns the LATEST draw, so we first fetch latest to learn the top
-draw number, then walk downward selecting exact draws.
+The newest draw number comes from the static draw-list archive (the bare
+results page renders empty through the browser-render fallback). Fetches
+go through a strategy chain: direct urllib (browser headers + cookies),
+then curl_cffi Chrome-TLS impersonation if installed, then r.jina.ai
+with X-Return-Format: html (real headless browser — defeats the empty
+SPA shell served to datacenter IPs; ~20 req/min, self-throttled).
+Markup regexes accept both server-rendered single quotes and the
+browser-DOM double quotes.
 
 Usage
 -----
@@ -56,6 +62,8 @@ import urllib.request
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 PAGE = "https://www.singaporepools.com.sg/en/4d/Pages/Results.aspx"
+DRAW_LIST = ("https://www.singaporepools.com.sg/DataFileArchive/Lottery/"
+             "Output/fourd_result_draw_list_en.html")
 
 # CI runners receive HTTP 200 with NO result markup from /en/4d/ (the TOTO
 # page serves fine to the same IPs — the site applies per-path bot rules).
@@ -74,15 +82,17 @@ _opener = urllib.request.build_opener(
     urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 _curl_session = None
 _logged_strategies = set()
+_preferred = ""  # strategy that last succeeded — tried first afterwards
 
 CSV_HEADER = (["drawNo", "date", "isSweepDay", "d1st", "d2nd", "d3rd"]
               + [f"s{i}" for i in range(1, 11)] + [f"c{i}" for i in range(1, 11)])
 
-date_re = re.compile(r"drawDate'>(Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) ([A-Za-z]+) (\d{4})<")
-num_re = re.compile(r"drawNumber'>Draw No\.\s*(\d+)<")
-first_re = re.compile(r"tdFirstPrize'>(\d{4})<")
-second_re = re.compile(r"tdSecondPrize'>(\d{4})<")
-third_re = re.compile(r"tdThirdPrize'>(\d{4})<")
+date_re = re.compile(r"drawDate[\"']>(Mon|Tue|Wed|Thu|Fri|Sat|Sun), (\d{2}) ([A-Za-z]+) (\d{4})<")
+num_re = re.compile(r"drawNumber[\"']>Draw No\.\s*(\d+)<")
+first_re = re.compile(r"tdFirstPrize[\"']>(\d{4})<")
+second_re = re.compile(r"tdSecondPrize[\"']>(\d{4})<")
+third_re = re.compile(r"tdThirdPrize[\"']>(\d{4})<")
+option_re = re.compile(r"<option value=[\"'](\d+)[\"']")
 
 
 def _fetch_urllib(url):
@@ -101,32 +111,80 @@ def _fetch_curl(url):
     return r.text
 
 
+_jina_last = [0.0]
+
+
+def _fetch_jina(url):
+    # r.jina.ai renders the page in a real headless browser, which gets the
+    # full server/client content the raw /en/4d/ page withholds from
+    # datacenter IPs (runners receive an empty SPA shell). Free tier is
+    # ~20 requests/min — self-throttle and back off on 429.
+    wait = 3.2 - (time.time() - _jina_last[0])
+    if wait > 0:
+        time.sleep(wait)
+    last_err = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(
+                "https://r.jina.ai/" + url,
+                headers={**HEADERS, "X-Return-Format": "html"})
+            with _opener.open(req, timeout=90) as r:
+                _jina_last[0] = time.time()
+                return r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            _jina_last[0] = time.time()
+            last_err = e
+            if e.code in (429, 403) and attempt < 2:
+                time.sleep(35)
+                continue
+            raise
+    raise last_err
+
+
 def _has_result_markup(html):
-    return "drawDate'>" in html and "tdFirstPrize'>" in html
+    return (re.search(r"drawDate[\"']>", html) is not None
+            and re.search(r"tdFirstPrize[\"']>", html) is not None)
+
+
+def _has_draw_list_markup(html):
+    return option_re.search(html) is not None
 
 
 def fetch_html(draw):
     tok = base64.b64encode(f"DrawNumber={draw}".encode()).decode()
     url = PAGE + ("?sppl=" + tok if draw else "")
+    return _fetch_with_fallback(url, _has_result_markup)
+
+
+def _strategy_chain():
     strategies = [("urllib+cookies", _fetch_urllib)]
     try:
         import curl_cffi  # noqa: F401
         strategies.append(("curl_cffi-chrome", _fetch_curl))
     except ImportError:
         pass
+    strategies.append(("jina-browser", _fetch_jina))
+    if _preferred:
+        strategies.sort(key=lambda s: s[0] != _preferred)
+    return strategies
+
+
+def _fetch_with_fallback(url, marker):
+    global _preferred
     problems = []
-    for name, fn in strategies:
+    for name, fn in _strategy_chain():
         try:
             html = fn(url)
         except Exception as e:
             problems.append(f"{name}: {e!r}")
             continue
-        if _has_result_markup(html):
+        if marker(html):
+            _preferred = name
             if name not in _logged_strategies:
                 print(f"  fetch strategy in use: {name}")
                 _logged_strategies.add(name)
             return html
-        problems.append(f"{name}: HTTP 200 but no result markup "
+        problems.append(f"{name}: HTTP 200 but expected markup missing "
                         f"(head {html[:200]!r})")
     raise ValueError("; ".join(problems))
 
@@ -144,7 +202,10 @@ def split_sections(html):
     rest = s[1].split("tbodyConsolationPrizes", 1)
     if len(rest) != 2:
         raise ValueError("no consolation prizes section")
-    return rest[0], rest[1]
+    # multi-draw pages (jina renders the history list): stop at the NEXT
+    # draw's starter table so cell_numbers sees exactly 10 consolation rows
+    consolation = rest[1].split("tbodyStarterPrizes", 1)[0]
+    return rest[0], consolation
 
 
 def parse(draw):
@@ -190,25 +251,26 @@ def is_sweep_day(date_str):
 
 
 def get_latest():
-    # The first request of every run — a 503/429 from the site's WAF here
-    # used to kill the whole job instantly, so give it the same retry
-    # treatment the per-draw fetches get.
+    """Newest draw number, read from the static draw-list archive.
+
+    The bare results page renders empty through the browser-render
+    fallback (verified), so the probe uses the draw list instead; its
+    options are draw-descending, newest first."""
     last_err = None
-    for attempt in range(4):
+    for attempt in range(3):
         try:
-            return parse(0)["drawNo"]
-        except urllib.error.HTTPError as e:
-            last_err = e
-            print(f"  ! latest-draw probe attempt {attempt + 1}/4: "
-                  f"HTTP {e.code} {e.reason}")
+            html = _fetch_with_fallback(DRAW_LIST, _has_draw_list_markup)
+            nums = [int(m) for m in option_re.findall(html)]
+            if nums:
+                return max(nums)
+            last_err = ValueError("draw list contained no options")
         except Exception as e:
             last_err = e
-            print(f"  ! latest-draw probe attempt {attempt + 1}/4: {e}")
+        print(f"  ! latest-draw probe attempt {attempt + 1}/3: {last_err}")
         time.sleep(5)
     raise SystemExit(
-        f"FATAL: could not fetch the latest draw page after 4 attempts "
-        f"({last_err!r}). Singapore Pools may be throttling this IP — "
-        f"re-run the workflow later.")
+        f"FATAL: could not fetch the draw list after 3 attempts "
+        f"({last_err!r}).")
 
 
 def load_existing(path):
