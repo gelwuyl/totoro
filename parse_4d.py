@@ -50,6 +50,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.request
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -132,7 +133,25 @@ def is_sweep_day(date_str):
 
 
 def get_latest():
-    return parse(0)["drawNo"]
+    # The first request of every run — a 503/429 from the site's WAF here
+    # used to kill the whole job instantly, so give it the same retry
+    # treatment the per-draw fetches get.
+    last_err = None
+    for attempt in range(4):
+        try:
+            return parse(0)["drawNo"]
+        except urllib.error.HTTPError as e:
+            last_err = e
+            print(f"  ! latest-draw probe attempt {attempt + 1}/4: "
+                  f"HTTP {e.code} {e.reason}")
+        except Exception as e:
+            last_err = e
+            print(f"  ! latest-draw probe attempt {attempt + 1}/4: {e}")
+        time.sleep(5)
+    raise SystemExit(
+        f"FATAL: could not fetch the latest draw page after 4 attempts "
+        f"({last_err!r}). Singapore Pools may be throttling this IP — "
+        f"re-run the workflow later.")
 
 
 def load_existing(path):
@@ -303,6 +322,7 @@ def main():
         mode = "FULL"
 
     new_records = []
+    failed_fetch = False
     if floor <= latest:
         print(f"[{mode}] fetching draws {latest} -> {floor} ...")
         for d in range(latest, floor - 1, -1):
@@ -319,6 +339,7 @@ def main():
                     time.sleep(1.5)
             else:
                 print(f"  !! draw {d} FAILED after retries - stopping")
+                failed_fetch = True
                 break
             time.sleep(0.2)  # be polite to the site
     else:
@@ -337,6 +358,11 @@ def main():
           f"total={len(merged)}  sanity_violations={sanity}")
     print(f"CSV  -> {csv_path}")
     print(f"JSON -> {json_path}")
+    if failed_fetch:
+        # outputs are written above for inspection, but a gappy archive must
+        # never be committed + deployed — fail the CI step instead
+        raise SystemExit("FATAL: some draws failed after retries — "
+                         "archive would be incomplete; not publishing.")
 
 
 if __name__ == "__main__":
