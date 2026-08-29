@@ -966,7 +966,7 @@ function parse4dCsv(text) {
   return { draws, skipped, error: null };
 }
 
-function DataTab({ customDraws, onImport }) {
+function DataTab({ customDraws, onImport, source = 'seed' }) {
   const fileRef = React.useRef(null);
   const [raw, setRaw] = useState('');
   const [message, setMessage] = useState(null); // { kind: 'ok'|'err', text }
@@ -1025,13 +1025,13 @@ function DataTab({ customDraws, onImport }) {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4">
           <Stat label="Draws loaded" value={String(active.length)} accent="text-emerald-300" />
           <Stat label="Newest draw" value={newest ? `#${newest.drawNo}` : '—'} sub={newest?.date} />
-          <Stat label="Source" value={customDraws ? 'Imported merge' : 'Seed snapshot'} sub="build-time embed" />
+          <Stat label="Source" value={source === 'hosted' ? 'Hosted archive' : source === 'imported' ? 'Imported merge' : 'Seed snapshot'} sub={source === 'seed' ? 'build-time embed' : 'merged over embed'} />
           <Stat label="Sweep days" value={String(active.filter(d => d.isSweepDay ?? isSweepDay(d.date)).length)} sub="flagged in schema" />
         </div>
         <div className="mt-4 bg-slate-950/60 border border-slate-800 rounded-lg p-3 text-xs text-slate-400 leading-relaxed">
-          The seeded snapshot holds the {FOURD_SEED_DRAWS.length} most recent draws at build time. The full official
-          archive (rolling 3 years — 470 draws, 5058 → 5527) is fetched by the scheduled pipeline below; you can also
-          import or paste CSV data right now and it merges with what is loaded.
+          The seeded snapshot holds the {FOURD_SEED_DRAWS.length} most recent draws at build time. On open, this page
+          fetches the full official archive hosted by the scheduled pipeline below (rolling 3 years, currently
+          5058 → 5527) and merges it over the embed; you can also import or paste CSV data and it merges with what is loaded.
         </div>
       </div>
 
@@ -1109,6 +1109,7 @@ function DataTab({ customDraws, onImport }) {
 export default function FourDAnalyzer() {
   const [activeTab, setActiveTab] = useState('planner');
   const [customDraws, setCustomDraws] = useState(null); // null = seed snapshot
+  const [source, setSource] = useState('seed'); // 'seed' | 'hosted' | 'imported'
 
   const mergeDraws = (incoming) => {
     setCustomDraws(prev => {
@@ -1118,6 +1119,22 @@ export default function FourDAnalyzer() {
       return [...byNo.values()].sort((a, b) => b.drawNo - a.drawNo);
     });
   };
+
+  // Phase D: fetch-merge the CI-hosted official archive over the embed on
+  // open (TOTO pattern; the embed stays as the offline/blocked fallback).
+  useEffect(() => {
+    let cancelled = false;
+    fetch('4d_official.json')
+      .then(r => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })
+      .then(rows => {
+        if (cancelled || !Array.isArray(rows)) return;
+        const valid = rows.filter(d => d && Number.isFinite(d.drawNo)
+          && /^\d{4}$/.test(String(d['1st'])));
+        if (valid.length) { mergeDraws(valid); setSource('hosted'); }
+      })
+      .catch(() => {}); // embed remains; Data & Sync explains manual import
+    return () => { cancelled = true; };
+  }, []);
 
   const activeDraws = customDraws ?? FOURD_SEED_DRAWS;
   const sweepCount = activeDraws.filter(d => d.isSweepDay ?? isSweepDay(d.date)).length;
@@ -1132,12 +1149,12 @@ export default function FourDAnalyzer() {
             Singapore Pools 4D Analyzer
           </h1>
           <span className="bg-slate-800 text-slate-300 border border-slate-700 text-xs px-2.5 py-1 rounded-full font-semibold">
-            {activeDraws.length} draws{sweepCount ? ` · ${sweepCount} sweep` : ''}{customDraws ? ' · merged' : ' · seed + pipeline'}
+            {activeDraws.length} draws{sweepCount ? ` · ${sweepCount} sweep` : ''}{source === 'hosted' ? ' · hosted archive' : source === 'imported' ? ' · merged' : ' · seed snapshot'}
           </span>
         </div>
         <p className="mt-2 text-slate-400 text-sm max-w-3xl leading-relaxed">
-          Exact bet math for every 4D bet type, fair-statistic insights, and a rigorously tested — and so
-          far empty — edge lab. Odds are fixed per $1 (Big 65.9¢ / Small 58.0¢ expected) and no draw
+          Exact bet math for every 4D bet type, fair-statistic insights, and a rigorously tested
+          edge lab. Odds are fixed per $1 (Big 65.9¢ / Small 58.0¢ expected) and no draw
           remembers the last one. Nothing here predicts outcomes; the tools show you the true price of a bet.
         </p>
       </header>
@@ -1175,14 +1192,15 @@ export default function FourDAnalyzer() {
       {activeTab === 'records' && (
         <div className="space-y-4 animate-in fade-in duration-300">
           <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 text-xs text-slate-400">
-            Showing all {activeDraws.length} loaded draws (newest first){customDraws ? ', including imported rows' : ' — the seeded snapshot'}. Amber badges mark
+            Showing all {activeDraws.length} loaded draws (newest first){customDraws ? ', including merged rows' : ''}. Amber badges mark
             Singapore Sweep days, whose results are Sweep-prize endings rather than machine draws; the
-            official public archive holds the last 3 years (470 draws, no gaps) and lands here via the pipeline.
+            official public archive (rolling 3 years, no gaps) is fetched automatically on open from the
+            pipeline-hosted database.
           </div>
           {[...activeDraws].sort((a, b) => b.drawNo - a.drawNo).map(d => <DrawCard key={d.drawNo} draw={d} />)}
         </div>
       )}
-      {activeTab === 'data' && <DataTab customDraws={customDraws} onImport={mergeDraws} />}
+      {activeTab === 'data' && <DataTab customDraws={customDraws} onImport={mergeDraws} source={source} />}
 
     </div>
   );
