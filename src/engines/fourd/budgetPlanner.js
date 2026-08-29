@@ -6,7 +6,7 @@
 // outcome distribution — how often you win something, and how big the swings
 // are.
 
-import { slipCost, portfolioStats, expectedValue, variance, ibetGroup, permCount, rollNumbers, permutationsOf } from './betMath.js';
+import { slipCost, portfolioStats, expectedValue, variance, ibetGroup, permCount, coveredNumbers } from './betMath.js';
 
 export const MODES = {
   max_ev: {
@@ -51,12 +51,8 @@ export function plan({ budget, candidates, mode = 'max_hit' }) {
   for (const c of scored) {
     if (left < c.cost) continue;
     // Never buy coverage you already have: P(any prize) is linear in DISTINCT
-    // numbers, so a zero-fresh entry adds cost and nothing else. An Ordinary
-    // entry covers exactly its one number; System/iBet cover their perms;
-    // Roll covers its 10 positional numbers.
-    const covered = c.betType === 'roll' ? rollNumbers(c.number, c.position ?? 0)
-      : c.betType === 'ordinary' ? [String(c.number).padStart(4, '0')]
-      : permutationsOf(c.number);
+    // numbers, so a zero-fresh entry adds cost and nothing else.
+    const covered = coveredNumbers(c);
     if (covered.every(n => seenNumbers.has(n))) continue;
     covered.forEach(n => seenNumbers.add(n));
     // Carry `position` through: downstream consumers (portfolioStats coverage,

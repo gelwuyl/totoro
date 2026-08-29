@@ -15,6 +15,10 @@ import {
 } from '../src/engines/fourd/drawStats.js';
 import { plan, MODES } from '../src/engines/fourd/budgetPlanner.js';
 import { replay } from '../src/engines/fourd/testBench.js';
+import {
+  legNotOffered, legEmpty, legEntries, legCostPerDraw, legCoveredNumbers,
+  legUpTo, legPayoutTable, slipSummary, slipReplay, LEG_TYPES, ROLL_POSITION,
+} from '../src/engines/fourd/slip.js';
 import { validateReport } from '../src/engines/fourd/signalLab.js';
 import { FOURD_SEED_DRAWS } from '../src/fourd/seedDraws.js';
 
@@ -396,6 +400,138 @@ const pSys1 = plan({
 check('planner drops system one-perm candidate, allocates the ordinary one',
   pSys1.allocation.length === 1 && pSys1.allocation[0].betType === 'ordinary' && pSys1.cost === 1,
   JSON.stringify(pSys1.allocation));
+
+console.log('\n== slip.js — multi-leg dual-pool lowering (v2.1 planner) ==');
+check('LEG_TYPES = the 4 bet types; ROLL_POSITION = 3 (4th digit varies)',
+  JSON.stringify(LEG_TYPES) === JSON.stringify(['ordinary', 'system', 'ibet', 'roll'])
+  && ROLL_POSITION === 3);
+
+// Lowering: one leg -> up to two entries (Big pool + Small pool, stake = pool $).
+const leOrd = legEntries({ type: 'ordinary', big: 2, small: 1 }, '8885');
+check('leg ordinary {2,1} lowers to big $2 + small $1 entries',
+  leOrd.length === 2
+  && leOrd.some(e => e.pool === 'big' && e.stake === 2)
+  && leOrd.some(e => e.pool === 'small' && e.stake === 1)
+  && leOrd.every(e => e.number === '8885' && e.betType === 'ordinary'),
+  JSON.stringify(leOrd));
+check('leg ibet {1,0} lowers to ONE entry (empty Small pool dropped)',
+  legEntries({ type: 'ibet', big: 1, small: 0 }, '8885').length === 1);
+check('leg {0,0} lowers to no entries', legEntries({ type: 'ordinary', big: 0, small: 0 }, '8885').length === 0);
+check('clause 2.5: system leg on 7777 lowers to no entries',
+  legEntries({ type: 'system', big: 1, small: 1 }, '7777').length === 0);
+check('legNotOffered: ibet on 0000 true, ordinary on 0000 false, ibet on 1234 false',
+  legNotOffered({ type: 'ibet' }, '0000') === true
+  && legNotOffered({ type: 'ordinary' }, '0000') === false
+  && legNotOffered({ type: 'ibet' }, '1234') === false);
+check('legEmpty: {0,0} true, {1,0} false', legEmpty({ big: 0, small: 0 }) && !legEmpty({ big: 1, small: 0 }));
+
+// Per-leg cost (per draw).
+check('legCost ordinary {2,1} = $3', legCostPerDraw({ type: 'ordinary', big: 2, small: 1 }, '1234') === 3);
+check('legCost system 1234 {1,1} = $48 (24 perms × $2)',
+  legCostPerDraw({ type: 'system', big: 1, small: 1 }, '1234') === 48);
+check('legCost ibet 1234 {1,0} = $1 (one bet covers all perms)',
+  legCostPerDraw({ type: 'ibet', big: 1, small: 0 }, '1234') === 1);
+check('legCost roll {1,0} = $10', legCostPerDraw({ type: 'roll', big: 1, small: 0 }, '8885') === 10);
+check('legCost roll {2,1} = $30 (10 numbers × $3)',
+  legCostPerDraw({ type: 'roll', big: 2, small: 1 }, '8885') === 30);
+check('legCost: empty leg $0; clause-2.5 leg $0 (never null)',
+  legCostPerDraw({ type: 'ordinary', big: 0, small: 0 }, '1234') === 0
+  && legCostPerDraw({ type: 'ibet', big: 3, small: 0 }, '0000') === 0);
+
+// Coverage.
+const covSys = legCoveredNumbers({ type: 'system', big: 1, small: 0 }, '1234');
+check('legCovered system 1234 = 24 distinct perms', covSys.length === 24 && new Set(covSys).size === 24);
+const covRoll = legCoveredNumbers({ type: 'roll', big: 1, small: 0 }, '8885');
+check('legCovered roll = 10 numbers, 4th digit varies (includes 8885)',
+  covRoll.length === 10 && covRoll.includes('8885') && covRoll.every(n => n.startsWith('888')));
+check('legCovered ordinary = exactly [number]',
+  JSON.stringify(legCoveredNumbers({ type: 'ordinary', big: 1, small: 0 }, '8885')) === JSON.stringify(['8885']));
+check('legCovered dual-pool leg = same union once (pools never duplicate)',
+  legCoveredNumbers({ type: 'system', big: 1, small: 1 }, '1234').length === 24);
+
+// Up-to (1st-prize payout, once per leg — never ×perms/×10).
+check('legUpTo ordinary {2,1} = 2×2000 + 1×3000 = 7000',
+  legUpTo({ type: 'ordinary', big: 2, small: 1 }, '1234') === 7000);
+check('legUpTo system 1234 {1,1} = 5000 (one perm takes 1st — NOT ×24)',
+  legUpTo({ type: 'system', big: 1, small: 1 }, '1234') === 5000);
+check('legUpTo roll {1,0} = 2000 (one covered number takes 1st — NOT ×10)',
+  legUpTo({ type: 'roll', big: 1, small: 0 }, '8885') === 2000);
+check('legUpTo ibet 1234 {1,1} = 83 + 125 = 208 (published 24-perm group table)',
+  legUpTo({ type: 'ibet', big: 1, small: 1 }, '1234') === 208);
+check('legUpTo: empty / clause-2.5 legs = 0',
+  legUpTo({ type: 'ordinary', big: 0, small: 0 }, '1234') === 0
+  && legUpTo({ type: 'ibet', big: 5, small: 0 }, '0000') === 0);
+
+// Per-leg payout table.
+const tblOrd = legPayoutTable({ type: 'ordinary' }, '1234');
+check('legPayoutTable ordinary: Big 1st 2000, Small consolation null',
+  tblOrd[0].big === 2000 && tblOrd[0].small === 3000
+  && tblOrd[4].big === 60 && tblOrd[4].small === null
+  && tblOrd[3].big === 250 && tblOrd[3].small === null);
+const tblIbet = legPayoutTable({ type: 'ibet' }, '1122');
+check('legPayoutTable ibet 1122 = 6-perm group table (Big 1st 335, Small 1st 500)',
+  tblIbet[0].big === 335 && tblIbet[0].small === 500, JSON.stringify(tblIbet[0]));
+const tblIbet1 = legPayoutTable({ type: 'ibet' }, '0000');
+check('legPayoutTable ibet on one-perm number falls back to Ordinary table (leg renders warning, not this table)',
+  tblIbet1[0].big === 2000);
+
+// Combined summary: cost, union coverage, up-to, days multiplier.
+const ssDual = slipSummary({
+  number: '1234',
+  legs: [{ type: 'ordinary', big: 1, small: 0 }, { type: 'ibet', big: 1, small: 0 }],
+});
+check('slipSummary ordinary+iBet on 1234: union coverage = 24 perms (NO double-count), cost $2',
+  ssDual.distinctNumbers === 24 && ssDual.costPerDraw === 2 && ssDual.cost === 2,
+  JSON.stringify({ d: ssDual.distinctNumbers, c: ssDual.cost }));
+check('slipSummary pAnyPrize = exact hypergeometric @ 24 distinct',
+  close(ssDual.pAnyPrize, pAnyPrize(24), 1e-12));
+const ssPools = slipSummary({ number: '1234', legs: [{ type: 'ordinary', big: 2, small: 1 }] });
+check('slipSummary dual-pool ordinary {2,1}: cost $3, upTo $7,000, EV = 2×0.659 + 0.580',
+  ssPools.costPerDraw === 3 && ssPools.upTo === 7000
+  && close(ssPools.ev, 2 * 0.659 + 0.58, 1e-12),
+  `cost ${ssPools.costPerDraw} upTo ${ssPools.upTo} ev ${ssPools.ev}`);
+check('slipSummary rtp = ev ÷ cost (exact, engine figures)',
+  close(ssPools.rtp, (2 * 0.659 + 0.58) / 3, 1e-12));
+const ssDays = slipSummary({ number: '1234', legs: [{ type: 'ordinary', big: 2, small: 1 }], days: 3 });
+check('slipSummary days=3: cost ×3 ($9), costPerDraw stays $3, upTo stays per-draw',
+  ssDays.cost === 9 && ssDays.costPerDraw === 3 && ssDays.upTo === 7000 && ssDays.days === 3);
+const ss25 = slipSummary({
+  number: '0000',
+  legs: [{ type: 'ordinary', big: 1, small: 1 }, { type: 'system', big: 1, small: 1 }],
+});
+check('slipSummary clause 2.5: system leg on 0000 costs $0, adds nothing; ordinary leg still priced',
+  ss25.costPerDraw === 2 && ss25.upTo === 5000 && ss25.distinctNumbers === 1,
+  JSON.stringify({ c: ss25.costPerDraw, u: ss25.upTo, d: ss25.distinctNumbers }));
+check('slipSummary no-Big-money slip uses the Small-pool any-prize figure (3 winners)',
+  slipSummary({ number: '1234', legs: [{ type: 'ordinary', big: 0, small: 1 }] }).pAnyPrize
+  === pAnyPrize(1, 'small')
+  && slipSummary({ number: '1234', legs: [{ type: 'ordinary', big: 0, small: 1 }, { type: 'ibet', big: 0, small: 2 }] }).pAnyPrize
+  === pAnyPrize(24, 'small'),
+  JSON.stringify(slipSummary({ number: '1234', legs: [{ type: 'ordinary', big: 0, small: 1 }] })));
+check('slipSummary empty legs: cost 0, coverage 0, rtp null',
+  (() => { const s = slipSummary({ number: '1234', legs: [{ type: 'ordinary', big: 0, small: 0 }] });
+    return s.cost === 0 && s.distinctNumbers === 0 && s.rtp === null && s.upTo === 0; })());
+
+// Replay integration over the real seed (draw 5518: 1st 0715).
+const slipRep = slipReplay({
+  number: '0715',
+  legs: [{ type: 'ordinary', big: 1, small: 0 }, { type: 'ibet', big: 0, small: 1 }],
+  draws: FOURD_SEED_DRAWS,
+});
+check('slipReplay ordinary Big $1 + iBet Small $1 on 0715: staked $12, won 2000 + 125 = 2125',
+  slipRep.staked === 12 && slipRep.won === 2125,
+  `staked ${slipRep.staked} won ${slipRep.won}`);
+check('slipReplay merges per-draw winnings across legs: draw 5518 chip = $2,125',
+  slipRep.perDraw.length === 1 && slipRep.perDraw[0].drawNo === FOURD_SEED_DRAWS[0].drawNo
+  && slipRep.perDraw[0].won === 2125,
+  JSON.stringify(slipRep.perDraw));
+const slipRepDup = slipReplay({
+  number: '8885',
+  legs: [{ type: 'ordinary', big: 1, small: 0 }, { type: 'ibet', big: 1, small: 0 }],
+  draws: FOURD_SEED_DRAWS,
+});
+check('slipReplay on 8885 (Ordinary + iBet): 12 distinct perms staked once each per pool',
+  slipRepDup.staked === 12 && slipRepDup.perEntry.length === 2);
 
 console.log('\n== signalLab report contract ==');
 const goodReport = {
