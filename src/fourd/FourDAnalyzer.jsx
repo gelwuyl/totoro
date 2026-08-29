@@ -166,6 +166,24 @@ function DigitInputs({ digits, setDigits }) {
   );
 }
 
+// Next draw-day from the 4D cadence (Wed/Sat/Sun — matches the archive's
+// dates). Deliberately NO cut-off time: the exact sales cut-off is not
+// hardcoded anywhere in this app, so "today on a draw day" simply says today.
+function nextDrawDate(from = new Date()) {
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const DAY = 24 * 60 * 60 * 1000;
+  const start = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start.getTime() + i * DAY);
+    const wd = d.getDay(); // 0 Sun · 3 Wed · 6 Sat
+    if (wd === 0 || wd === 3 || wd === 6) {
+      const label = `${String(d.getDate()).padStart(2, '0')} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+      return { label, today: i === 0, sweep: isSweepDay(label) };
+    }
+  }
+  return null;
+}
+
 function PlannerTab({ draws }) {
   const [digits, setDigits] = useState(['8', '8', '8', '5']);
   const [days, setDays] = useState(1);
