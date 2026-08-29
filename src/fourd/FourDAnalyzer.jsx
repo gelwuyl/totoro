@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { FourDigitNumber, isSweepDay } from '../shell/DigitBox.jsx';
 import { FOURD_SEED_DRAWS } from './seedDraws.js';
 import { permCount } from '../engines/fourd/betMath.js';
+import { NUMBER_SPACE } from '../engines/fourd/constants.js';
 import {
   slipSummary, slipReplay, legNotOffered, legEmpty, legCostPerDraw,
   legPayoutTable, LEG_TYPES,
@@ -131,7 +132,7 @@ function Chip({ on = false, add = false, onClick, title, children }) {
       ? 'border-dashed border-emerald-800 bg-slate-950/60 text-emerald-300 hover:bg-emerald-900/30'
       : 'border-slate-700 bg-slate-950/60 text-slate-400 hover:text-slate-200 hover:border-slate-500';
   return (
-    <button type="button" onClick={onClick} title={title}
+    <button type="button" onClick={onClick} title={title} aria-pressed={on || undefined}
       className={`text-xs font-bold px-3 py-1.5 rounded-full border transition ${styles}`}>
       {children}
     </button>
@@ -213,6 +214,10 @@ function PlannerTab({ draws }) {
   );
   const next = nextDrawDate();
 
+  // A raised add-iBet offer was priced for the number it was raised on — drop
+  // it when the digits change (on a one-perm number the offer is unplaceable).
+  useEffect(() => { setAddIbetAmt(null); }, [n]);
+
   const setPool = (i, pool, raw) => setLegs(ls => ls.map((l, j) => j === i
     ? { ...l, [pool]: Math.max(0, Math.floor(Number(raw) || 0)) }
     : l));
@@ -238,9 +243,10 @@ function PlannerTab({ draws }) {
         setAddIbetAmt(total);
         setBudgetNote(`Your ${money(total)} covers the most prize places as iBet — it sweeps every arrangement of ${n} in one bet. Add it below, or keep your current bets.`);
       } else {
-        setLegs(ls => ls.map(l => (l.type === 'ibet' && !legNotOffered(l, n))
-          ? { ...l, big: total, small: 0 }
-          : { ...l, big: 0, small: 0 }));
+        setLegs(ls => {
+          const ibetIdx = ls.findIndex(l => l.type === 'ibet' && !legNotOffered(l, n));
+          return ls.map((l, j) => (j === ibetIdx ? { ...l, big: total, small: 0 } : { ...l, big: 0, small: 0 }));
+        });
         setBudgetNote(`Moved all ${money(total)} into the iBet bet — most prize places per dollar. Other bets zeroed (not removed).`);
       }
     } else if (mode === 'swing') {
@@ -268,7 +274,7 @@ function PlannerTab({ draws }) {
     ? `${(summary.pAnyPrize * 100).toFixed(2).replace(/\.?0+$/, '')}%`
     : '—';
   const firstChance = summary.distinctNumbers > 0 && summary.costPerDraw > 0
-    ? `1-in-${Math.round(10000 / summary.distinctNumbers).toLocaleString('en-SG')}`
+    ? `1-in-${Math.round(NUMBER_SPACE / summary.distinctNumbers).toLocaleString('en-SG')}`
     : '—';
 
   return (
@@ -402,7 +408,7 @@ function PlannerTab({ draws }) {
           {summary.costPerDraw === 0 || summary.rtp === null
             ? <>Fixed odds: <b className="text-slate-200">Big returns 65.9¢ per $1 · Small 58.0¢</b> — on average, whatever you bet.</>
             : <>Honest price: every $1 here returns about <b className="text-slate-200">{(summary.rtp * 100).toFixed(1)}¢</b> on
-              average (Big 65.9¢ / Small 58.0¢). Expected loss ≈ <b className="text-slate-200">{money(Math.max(0, summary.cost - summary.ev * days))}</b> on
+              average (Big 65.9¢ / Small 58.0¢). Expected loss ≈ <b className="text-slate-200">{money(summary.expectedLoss)}</b> on
               this slip — <b className="text-slate-200">no bet changes it</b>.</>}
         </div>
       </div>
@@ -473,8 +479,8 @@ function PlannerTab({ draws }) {
             <span className="text-[11px] font-extrabold tracking-wider uppercase text-slate-500">
               {replayResult.drawsPlayed} archived draws
             </span>
-            <span className={`text-lg font-extrabold ${replayResult.net < 0 ? 'text-rose-400' : 'text-emerald-300'}`}>
-              {replayResult.net < 0 ? '–' : '+'}{money(Math.abs(replayResult.net))}
+            <span className={`text-lg font-extrabold ${!hasActive ? 'text-slate-700' : replayResult.net < 0 ? 'text-rose-400' : 'text-emerald-300'}`}>
+              {!hasActive ? '—' : (replayResult.net < 0 ? '–' : '+') + money(Math.abs(replayResult.net))}
             </span>
           </div>
           <div className="text-xs text-slate-400 leading-relaxed mt-1 border-t border-slate-800/60 pt-2">

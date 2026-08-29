@@ -28,15 +28,25 @@ export function legNotOffered(leg, number) {
 }
 
 // True when the leg carries no money — it shows an "empty" hint and costs $0.
+// Floors first so it always agrees with legEntries about what will be bought.
 export function legEmpty(leg) {
-  return (Number(leg.big) || 0) + (Number(leg.small) || 0) === 0;
+  return legStakes(leg).big + legStakes(leg).small === 0;
+}
+
+// Whole-dollar stakes of a leg, floored at 0 (matches MIN_STAKE = 1 inputs).
+function legStakes(leg) {
+  return {
+    big: Math.max(0, Math.floor(Number(leg.big) || 0)),
+    small: Math.max(0, Math.floor(Number(leg.small) || 0)),
+  };
 }
 
 // Lower one leg to its betMath entries (pool-specific, stake = the pool's $).
-// A not-offered or empty leg lowers to NO entries (costs and wins nothing).
+// A not-offered, empty, or UNKNOWN-TYPE leg lowers to NO entries (costs and
+// wins nothing) — an unknown type must never price as a free Ordinary clone.
 export function legEntries(leg, number, position = ROLL_POSITION) {
-  const big = Math.max(0, Math.floor(Number(leg.big) || 0));
-  const small = Math.max(0, Math.floor(Number(leg.small) || 0));
+  if (!LEG_TYPES.includes(leg.type)) return [];
+  const { big, small } = legStakes(leg);
   if (legNotOffered(leg, number) || big + small === 0) return [];
   const n = String(number).padStart(4, '0');
   const entries = [];
@@ -64,8 +74,8 @@ export function legCoveredNumbers(leg, number, position = ROLL_POSITION) {
 // covered number can take 1st in a draw, so System/Roll/iBet pay their table's
 // 1st prize once — never ×perms/×10.
 export function legUpTo(leg, number) {
-  const big = Math.max(0, Math.floor(Number(leg.big) || 0));
-  const small = Math.max(0, Math.floor(Number(leg.small) || 0));
+  if (!LEG_TYPES.includes(leg.type)) return 0;
+  const { big, small } = legStakes(leg);
   if (legNotOffered(leg, number) || big + small === 0) return 0;
   if (leg.type === 'ibet') {
     const t = IBET_PRIZES[ibetGroup(number)]; // group != null: not-offered filtered above
@@ -109,7 +119,8 @@ export function slipSummary({ number, legs, days = 1 }) {
 
   const costPerDraw = legs.reduce((sum, leg) => sum + legCostPerDraw(leg, n), 0);
   const upTo = legs.reduce((sum, leg) => sum + legUpTo(leg, n), 0);
-  const hasBigMoney = legs.some(leg => !legNotOffered(leg, n) && (Number(leg.big) || 0) > 0);
+  const hasBigMoney = legs.some(leg => LEG_TYPES.includes(leg.type)
+    && !legNotOffered(leg, n) && (Number(leg.big) || 0) > 0);
 
   return {
     ...stats,
@@ -121,6 +132,9 @@ export function slipSummary({ number, legs, days = 1 }) {
     upTo,
     days: d,
     rtp: stats.cost > 0 ? stats.ev / stats.cost : null,
+    // Total expected loss over all `days` draws (per-draw ev × days, minus the
+    // total cost), floored at 0 — the honest-price footer's figure.
+    expectedLoss: Math.max(0, stats.cost * d - stats.ev * d),
   };
 }
 
@@ -133,7 +147,10 @@ export function slipReplay({ number, legs, draws, excludeSweep = false }) {
   const result = replay({ entries, draws, excludeSweep });
   const perDrawMap = new Map();
   for (const e of result.perEntry) {
-    for (const h of e.hits) {
+    // Merge over the UNCAPPED hit list — the display-capped `hits` would
+    // silently drop draws once an entry beats the 20-hit cap (system legs on
+    // a 24-perm number hit ~5.5% of ~470 archived draws).
+    for (const h of (e.allHits || e.hits)) {
       const cur = perDrawMap.get(h.drawNo) || { drawNo: h.drawNo, date: h.date, won: 0 };
       cur.won += h.amount;
       perDrawMap.set(h.drawNo, cur);

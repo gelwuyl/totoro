@@ -533,6 +533,50 @@ const slipRepDup = slipReplay({
 check('slipReplay on 8885 (Ordinary + iBet): 12 distinct perms staked once each per pool',
   slipRepDup.staked === 12 && slipRepDup.perEntry.length === 2);
 
+// Uncapped per-draw merge: 25 draws each with perm 1243 as a Big starter — a
+// system Big $1 leg on 1234 hits ALL 25, beating testBench's 20-hit display
+// cap. perDraw must still see every draw (via allHits), while `hits` stays
+// capped at 20 (existing display contract).
+const cappedDraws = Array.from({ length: 25 }, (_, i) => ({
+  drawNo: 9001 + i,
+  date: `01 Jan 2026`,
+  '1st': '7777', '2nd': '7778', '3rd': '7779',
+  starter: ['1243'], consolation: [],
+  isSweepDay: false,
+}));
+const slipRepCapped = slipReplay({
+  number: '1234',
+  legs: [{ type: 'system', big: 1, small: 0 }],
+  draws: cappedDraws,
+});
+check('slipReplay uncapped: system on 1234 over 25 starter hits — hitCount 25, perDraw 25 chips (not capped at 20)',
+  slipRepCapped.hitCount === 25 && slipRepCapped.perDraw.length === 25,
+  `hitCount ${slipRepCapped.hitCount} perDraw ${slipRepCapped.perDraw.length}`);
+check('slipReplay uncapped: perDraw sums to won ($6,250) and display hits stay capped at 20',
+  slipRepCapped.perDraw.reduce((a, h) => a + h.won, 0) === 6250
+  && slipRepCapped.won === 6250
+  && slipRepCapped.perEntry[0].hits.length === 20
+  && slipRepCapped.perEntry[0].allHits.length === 25);
+check('slipReplay uncapped: staked $600 (24 perms × 25 draws), descending drawNo',
+  slipRepCapped.staked === 600
+  && slipRepCapped.perDraw[0].drawNo === 9025 && slipRepCapped.perDraw[24].drawNo === 9001);
+
+const ssLoss = slipSummary({ number: '1234', legs: [{ type: 'ordinary', big: 2, small: 1 }], days: 3 });
+check('slipSummary expectedLoss = cost − ev×days ($9 − 1.898×3), floored at 0',
+  close(ssLoss.expectedLoss, 9 - (2 * 0.659 + 0.58) * 3, 1e-12) && ssLoss.expectedLoss >= 0,
+  `got ${ssLoss.expectedLoss}`);
+check('slipSummary expectedLoss 0 for an empty slip',
+  slipSummary({ number: '1234', legs: [{ type: 'ordinary', big: 0, small: 0 }] }).expectedLoss === 0);
+
+check('unknown leg type lowers to NOTHING (no free coverage / phantom pricing)',
+  legEntries({ type: 'nope', big: 1, small: 1 }, '1234').length === 0
+  && legUpTo({ type: 'nope', big: 1, small: 1 }, '1234') === 0
+  && (() => { const s = slipSummary({ number: '1234', legs: [{ type: 'nope', big: 1, small: 1 }] });
+    return s.cost === 0 && s.distinctNumbers === 0 && s.upTo === 0 && s.ev === 0; })());
+check('legEmpty floors fractional stakes (agrees with legEntries)',
+  legEmpty({ big: 0.5, small: 0 }) === true && legEmpty({ big: 0, small: 0.9 }) === true
+  && legEmpty({ big: 1, small: 0 }) === false);
+
 console.log('\n== signalLab report contract ==');
 const goodReport = {
   generatedAt: '2026-08-28T00:00:00Z', drawsAnalyzed: 470, sweepDaysExcluded: 12,
