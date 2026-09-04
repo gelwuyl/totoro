@@ -1,0 +1,102 @@
+name: Preview branch on GitHub Pages
+
+# Builds a feature branch and publishes it under /preview/<slug>/ on the live
+# Pages site WITHOUT touching what main serves at the root. The site root gets
+# rebuilt from the base branch (identical content to production), so this
+# workflow and deploy.yml share the `pages` concurrency group and never fight.
+#
+# Run manually:
+#   gh workflow run preview.yml -f ref=feat/betplanner-v2
+# Then open: <pages-url>/preview/<branch-slug>/  (e.g. #/4d for the planner)
+#
+# Works because the app is built with base: './' (relative assets), routes by
+# hash (#/4d), and fetches its data files relatively — a dist/ copy is fully
+# self-contained in any subfolder.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch to preview'
+        required: true
+        default: 'feat/betplanner-v2'
+      base-ref:
+        description: 'Branch served at the site root'
+        required: true
+        default: 'main'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute preview slug
+        id: slug
+        run: |
+          SLUG="$(printf '%s' "${{ inputs.ref }}" | tr '[:upper:]' '[:lower:]' | sed -e 's#[^a-z0-9._-]#-#g' -e 's#-\+-#-#g')"
+          echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
+
+      # --- site root: a production-identical build of the base branch -------
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base-ref }}
+          path: base
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Refresh TOTO database (best-effort, same as deploy.yml)
+        run: python parse_toto.py --out public || echo "scrape failed; using embedded base"
+        working-directory: base
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install
+        working-directory: base
+
+      - run: npm run build
+        working-directory: base
+
+      # --- the branch build under /preview/<slug>/ ---------------------------
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          path: preview-src
+
+      - run: npm install
+        working-directory: preview-src
+
+      - run: npm run build
+        working-directory: preview-src
+
+      # --- one Pages artifact: base at /, branch at /preview/<slug>/ --------
+      - name: Stage combined Pages artifact
+        env:
+          SLUG: ${{ steps.slug.outputs.slug }}
+        run: |
+          mkdir -p "staging/preview/${SLUG}"
+          cp -r base/dist/. staging/
+          cp -r preview-src/dist/. "staging/preview/${SLUG}/"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: staging
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Preview URL
+        run: echo "Preview deployed at ${{ steps.deployment.outputs.page_url }}preview/${{ steps.slug.outputs.slug }}/"
