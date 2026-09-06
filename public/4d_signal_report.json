@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2026-09-05T16:30:20Z",
-  "drawsAnalyzed": 437,
+  "generatedAt": "2026-09-06T16:46:48Z",
+  "drawsAnalyzed": 438,
   "sweepDaysExcluded": "schema flag; excluded by loader",
   "trainWindow": 150,
-  "testSteps": 377,
+  "testSteps": 378,
   "battery": [
     {
       "name": "frequency",
@@ -11,16 +11,16 @@
       "baseline": "uniform",
       "metric": {
         "metricName": "log-loss",
-        "model": 2.35226,
+        "model": 2.35277,
         "baseline": 2.30259
       },
-      "liftPct": -2.157,
-      "accuracy": 0.09748,
+      "liftPct": -2.179,
+      "accuracy": 0.09722,
       "chanceAccuracy": 0.1,
       "calibration": {
-        "ece": 0.10266
+        "ece": 0.10261
       },
-      "fdrQ": 0.20627,
+      "fdrQ": 0.2135,
       "verdict": "no-edge"
     },
     {
@@ -29,14 +29,14 @@
       "baseline": "uniform",
       "metric": {
         "metricName": "log-loss",
-        "model": 2.40063,
+        "model": 2.4012,
         "baseline": 2.30259
       },
-      "liftPct": -4.258,
-      "accuracy": 0.16645,
+      "liftPct": -4.283,
+      "accuracy": 0.16601,
       "chanceAccuracy": 0.1,
       "calibration": {
-        "ece": 0.08304
+        "ece": 0.08301
       },
       "fdrQ": 0.0,
       "verdict": "no-edge"
@@ -47,14 +47,14 @@
       "baseline": "uniform",
       "metric": {
         "metricName": "log-loss",
-        "model": 5.35544,
+        "model": 5.37259,
         "baseline": 2.30259
       },
-      "liftPct": -132.584,
-      "accuracy": 0.11804,
+      "liftPct": -133.329,
+      "accuracy": 0.11772,
       "chanceAccuracy": 0.1,
       "calibration": {
-        "ece": 0.05326
+        "ece": 0.05312
       },
       "fdrQ": 0.0,
       "verdict": "no-edge"
