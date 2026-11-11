@@ -37,11 +37,16 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}preview/${{ steps.slug.outputs.slug }}/
     steps:
       - name: Compute preview slug
         id: slug
+        env:
+          INPUT_REF: ${{ inputs.ref }}
         run: |
-          SLUG="$(printf '%s' "${{ inputs.ref }}" | tr '[:upper:]' '[:lower:]' | sed -e 's#[^a-z0-9._-]#-#g' -e 's#-\+-#-#g')"
+          SLUG="$(printf '%s' "$INPUT_REF" | tr '[:upper:]' '[:lower:]' | sed -e 's#[^a-z0-9._-]#-#g' -e 's#-\+-#-#g')"
           echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
 
       # --- site root: a production-identical build of the base branch -------
