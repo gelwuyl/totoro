@@ -1,15 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { FourDigitNumber, isSweepDay } from '../shell/DigitBox.jsx';
 import { FOURD_SEED_DRAWS } from './seedDraws.js';
-import { ORDINARY_PRIZES, IBET_PRIZES } from '../engines/fourd/constants.js';
+import { permCount } from '../engines/fourd/betMath.js';
+import { NUMBER_SPACE } from '../engines/fourd/constants.js';
 import {
-  permCount, ibetGroup, permutationsOf, rollNumbers,
-  slipCost, nextDrawProbabilities,
-  portfolioStats,
-} from '../engines/fourd/betMath.js';
-import { digitFrequencies, chiSquareByPosition, numberInsights } from '../engines/fourd/drawStats.js';
-import { MODES, plan } from '../engines/fourd/budgetPlanner.js';
-import { replay } from '../engines/fourd/testBench.js';
+  slipSummary, slipReplay, legNotOffered, legEmpty, legCostPerDraw,
+  legPayoutTable, LEG_TYPES,
+} from '../engines/fourd/slip.js';
+import { digitFrequencies, chiSquareByPosition } from '../engines/fourd/drawStats.js';
 import { validateReport, verdictCopy, liftCopy } from '../engines/fourd/signalLab.js';
 
 // 4D analyzer — full UI over the verified engines. Every displayed number is
@@ -31,37 +29,12 @@ const BET_TYPE_LABELS = {
   roll: '4D Roll',
 };
 
-const POOL_LABELS = { big: 'Big', small: 'Small' };
 const POSITION_LABELS = ['1st digit', '2nd digit', '3rd digit', '4th digit'];
-const TIER_LABELS = { first: '1st prize', second: '2nd prize', third: '3rd prize', starter: 'Starter', consolation: 'Consolation' };
 
 // ---------- formatting helpers (display only — values come from engines) ----
 
 const money = (n) => '$' + (Number.isInteger(n) ? String(n) : n.toFixed(2));
-const cents = (n) => `${(n * 100).toFixed(1)}¢`;
 const pct = (p, dp = 2) => `${(p * 100).toFixed(dp)}%`;
-const pad4 = (s) => String(s || '').padStart(4, '0');
-
-function RtpBanner({ ev, cost, absoluteLoss }) {
-  // The house-edge banner the quality bar requires on every calculator screen.
-  // Both inputs come from engine functions. `cost` is the per-draw (or whole-
-  // plan) outlay the RTP is measured against; the per-$1 loss is 1 − RTP, and
-  // the absolute expected loss is passed separately when the caller wants the
-  // whole-slip figure shown too.
-  if (!(cost > 0) || !Number.isFinite(ev)) return null;
-  const rtp = ev / cost;
-  const lossPerDollar = 1 - rtp;
-  return (
-    <div className="bg-amber-950/40 border border-amber-800/70 rounded-xl p-3 text-xs text-amber-200 leading-relaxed">
-      <span className="font-bold">Fixed odds:</span> expected return {cents(rtp)} per $1 staked
-      (RTP {pct(rtp, 1)}) · expected loss {cents(lossPerDollar)} per $1 per draw
-      {Number.isFinite(absoluteLoss) && absoluteLoss > 0.005
-        ? <> · {money(absoluteLoss)} on this slip</>
-        : null}. Every 4D bet type prices within ±0.7% of its pool's figure — the house edge
-      does not move.
-    </div>
-  );
-}
 
 function Stat({ label, value, sub, accent = 'text-white' }) {
   return (
@@ -84,46 +57,6 @@ function VerdictBadge({ kind, children, title }) {
     <span title={title} className={`text-[10px] border px-2 py-0.5 rounded-full font-semibold ${styles[kind] || styles.neutral}`}>
       {children}
     </span>
-  );
-}
-
-// ---------- inputs ----------------------------------------------------------
-
-function NumberInput({ value, onChange, label = '4-digit number', id }) {
-  return (
-    <label className="block">
-      <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{label}</span>
-      <input
-        id={id}
-        value={value}
-        inputMode="numeric"
-        autoComplete="off"
-        placeholder="0000"
-        onChange={(e) => onChange(e.target.value.replace(/\D/g, '').slice(0, 4))}
-        className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 font-mono text-lg tracking-[0.35em] text-white focus:outline-none focus:border-emerald-500"
-      />
-      {value.length > 0 && value.length < 4 && (
-        <span className="text-[10px] text-amber-300/80 mt-0.5 block">
-          pricing {pad4(value)} — add {4 - value.length} more digit{4 - value.length === 1 ? '' : 's'}
-        </span>
-      )}
-    </label>
-  );
-}
-
-function Select({ label, value, onChange, options, id }) {
-  return (
-    <label className="block">
-      <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{label}</span>
-      <select
-        id={id}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-2 text-sm text-slate-100 focus:outline-none focus:border-emerald-500"
-      >
-        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-    </label>
   );
 }
 
@@ -175,394 +108,61 @@ function DrawCard({ draw }) {
   );
 }
 
-// ---------- TAB 1: Bet & Planner --------------------------------------------
+// ---------- TAB 1: Bet & Planner (v2.1) --------------------------------------
 
-const DEFAULT_CANDIDATES = [
-  { number: '1234', betType: 'ibet', pool: 'big' },
-  { number: '5678', betType: 'ordinary', pool: 'big' },
-  { number: '9012', betType: 'system', pool: 'big' },
+// Ratified v2.1 shape: ONE number at a time; every bet on it is a "leg" with
+// Big + Small amounts on the same slip; ONE combined summary card (cost +
+// up-to + next draw + chances + honest-price line); per-leg payout tables; a
+// combined archive replay; and a budget card that mirrors the bets live and
+// rebalances money WITHOUT ever changing bet types. Every displayed figure is
+// read from the engines (src/engines/fourd/slip.js → betMath/testBench) — the
+// component performs no bet math of its own.
+
+const STYLE_CHIPS = [
+  { id: 'odds', label: 'Best odds of a win' },
+  { id: 'swing', label: 'Biggest swing' },
+  { id: 'smooth', label: 'Smoother ride' },
+  { id: 'both', label: 'Both pools 2:1' },
 ];
 
-function PlannerTab({ draws }) {
-  // The plan → price → test journey, all fed by the engines.
-  const [budget, setBudget] = useState(10);
-  const [mode, setMode] = useState('max_hit');
-  const [candidates, setCandidates] = useState(DEFAULT_CANDIDATES);
-  const [draft, setDraft] = useState({ number: '', betType: 'ordinary', pool: 'big', position: '0' });
-  const [result, setResult] = useState(null);
-
-  // Bet Calculator state (section 2)
-  const [calc, setCalc] = useState({ number: '1234', betType: 'ibet', pool: 'big', stake: 1, drawDays: 1, position: '0' });
-
-  // Replay scope: the latest allocation, or the raw candidates if none yet.
-  const [replayExcludeSweep, setReplayExcludeSweep] = useState(false);
-
-  const addCandidate = () => {
-    if (draft.number.length !== 4) return;
-    const entry = draft.betType === 'roll'
-      ? { number: draft.number, betType: 'roll', pool: draft.pool, position: Number(draft.position) }
-      : { number: draft.number, betType: draft.betType, pool: draft.pool };
-    setCandidates(cs => [...cs, entry]);
-    setDraft(d => ({ ...d, number: '' }));
-  };
-
-  const runPlan = () => {
-    setResult(plan({ budget, candidates, mode }));
-  };
-
-  const replaySource = (result?.allocation?.length ? result.allocation : candidates)
-    .map(e => ({ ...e, stake: 1 }));
-  const replayResult = useMemo(
-    () => replay({ entries: replaySource, draws, excludeSweep: replayExcludeSweep }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [JSON.stringify(replaySource), draws, replayExcludeSweep],
-  );
-
+function Chip({ on = false, add = false, onClick, title, children }) {
+  const styles = on
+    ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300'
+    : add
+      ? 'border-dashed border-emerald-800 bg-slate-950/60 text-emerald-300 hover:bg-emerald-900/30'
+      : 'border-slate-700 bg-slate-950/60 text-slate-400 hover:text-slate-200 hover:border-slate-500';
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
-
-      {/* --- Budget allocator hero --- */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 md:p-6 shadow-xl space-y-5">
-        <div>
-          <h2 className="text-xl font-bold text-white">Budget Planner</h2>
-          <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-            Split a per-draw budget across your numbers and bet types. Every mode has the same
-            expected return per $1 — they change the <em>shape</em> of the outcome (hit frequency vs
-            swing size), never the odds.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div className="space-y-4">
-            <label className="block">
-              <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Budget per draw ($)</span>
-              <input
-                type="number" min={1} step={1} value={budget}
-                onChange={(e) => setBudget(e.target.value)}
-                className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-lg font-mono text-white focus:outline-none focus:border-emerald-500"
-              />
-            </label>
-
-            <div className="grid grid-cols-2 gap-2">
-              {Object.values(MODES).map(m => (
-                <button
-                  key={m.id}
-                  onClick={() => setMode(m.id)}
-                  className={`text-left rounded-lg border p-2.5 transition ${mode === m.id
-                    ? 'border-emerald-500 bg-emerald-500/10'
-                    : 'border-slate-800 bg-slate-950/50 hover:border-slate-600'}`}
-                >
-                  <div className={`text-xs font-bold ${mode === m.id ? 'text-emerald-300' : 'text-slate-200'}`}>{m.label}</div>
-                </button>
-              ))}
-            </div>
-            <p className="text-[11px] text-slate-500 leading-relaxed -mt-1">{MODES[mode].blurb}</p>
-          </div>
-
-          <div className="space-y-3">
-            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Your numbers × bet types</div>
-            <div className="flex flex-wrap gap-1.5 min-h-8">
-              {candidates.length === 0 && <span className="text-xs text-slate-600">Add at least one entry below.</span>}
-              {candidates.map((c, i) => (
-                <span key={`${c.number}-${c.betType}-${c.pool}-${c.position ?? 'x'}-${i}`}
-                  className="inline-flex items-center gap-1.5 bg-slate-800 border border-slate-700 rounded-full pl-2.5 pr-1.5 py-1 text-xs text-slate-200">
-                  <span className="font-mono tracking-wider">{pad4(c.number)}</span>
-                  <span className="text-slate-400">{BET_TYPE_LABELS[c.betType]} · {POOL_LABELS[c.pool]}</span>
-                  <button
-                    onClick={() => setCandidates(cs => cs.filter((_, j) => j !== i))}
-                    aria-label={`Remove ${c.number} ${c.betType}`}
-                    className="w-4 h-4 rounded-full bg-slate-700 hover:bg-rose-600 text-slate-300 hover:text-white text-[10px] leading-none"
-                  >×</button>
-                </span>
-              ))}
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <NumberInput label="Number" value={draft.number} onChange={(v) => setDraft(d => ({ ...d, number: v }))} />
-              <Select label="Bet type" value={draft.betType} onChange={(v) => setDraft(d => ({ ...d, betType: v }))}
-                options={Object.entries(BET_TYPE_LABELS).map(([value, label]) => ({ value, label }))} />
-              <Select label="Pool" value={draft.pool} onChange={(v) => setDraft(d => ({ ...d, pool: v }))}
-                options={Object.entries(POOL_LABELS).map(([value, label]) => ({ value, label }))} />
-              {draft.betType === 'roll' && (
-                <Select label="Roll position" value={draft.position} onChange={(v) => setDraft(d => ({ ...d, position: v }))}
-                  options={POSITION_LABELS.map((label, i) => ({ value: String(i), label: `${label} varies` }))} />
-              )}
-            </div>
-            <button
-              onClick={addCandidate}
-              disabled={draft.number.length !== 4}
-              className="w-full py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white rounded-lg text-sm font-semibold transition"
-            >
-              + Add entry
-            </button>
-          </div>
-        </div>
-
-        <button
-          onClick={runPlan}
-          className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/30 transition"
-        >
-          Allocate ${Number(budget) || 0} · {MODES[mode].label}
-        </button>
-
-        {result && (
-          <div className="border-t border-slate-800 pt-4 space-y-4">
-            {result.allocation.length === 0 ? (
-              <div className="text-xs text-rose-300 bg-rose-950/40 border border-rose-800/60 rounded-lg p-3">
-                Nothing could be allocated — the budget is smaller than every entry's cost (e.g. a
-                $24 System Entry needs $24). Raise the budget or pick cheaper entries.
-              </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-                  <Stat label="Spent" value={money(result.cost)} sub={`unspent ${money(result.unspent)}`} accent="text-emerald-300" />
-                  <Stat label="Expected return" value={money(result.ev)} sub={`${cents(result.cost ? result.ev / result.cost : 0)} per $1`} />
-                  <Stat label="Outcome swing (SD)" value={money(result.sd)} sub="per draw" />
-                  <Stat label="Chance of any prize" value={pct(result.pAnyPrize)} sub={`${result.distinctNumbers} distinct numbers`} accent="text-sky-300" />
-                  <Stat label="Entries" value={String(result.allocation.length)} sub={MODES[result.mode].label} />
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="text-left text-slate-500 border-b border-slate-800">
-                        <th className="py-1.5 pr-3 font-semibold">Number</th>
-                        <th className="py-1.5 pr-3 font-semibold">Bet type</th>
-                        <th className="py-1.5 pr-3 font-semibold">Pool</th>
-                        <th className="py-1.5 pr-3 font-semibold text-right">Cost</th>
-                        <th className="py-1.5 font-semibold text-right">Covers</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.allocation.map((a, i) => {
-                        const covered = a.betType === 'roll' ? 10 : a.betType === 'system' ? permCount(a.number) : a.betType === 'ibet' ? ibetGroup(a.number) : 1;
-                        return (
-                          <tr key={i} className="border-b border-slate-800/50 text-slate-300">
-                            <td className="py-1.5 pr-3 font-mono tracking-wider text-white">{pad4(a.number)}</td>
-                            <td className="py-1.5 pr-3">{BET_TYPE_LABELS[a.betType]}{a.betType === 'roll' ? ` (${POSITION_LABELS[a.position ?? 0]})` : ''}</td>
-                            <td className="py-1.5 pr-3">{POOL_LABELS[a.pool]}</td>
-                            <td className="py-1.5 pr-3 text-right font-mono">{money(a.cost)}</td>
-                            <td className="py-1.5 text-right font-mono text-slate-400">{covered}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                <RtpBanner ev={result.ev} cost={result.cost} absoluteLoss={result.cost - result.ev} />
-                <p className="text-[11px] text-slate-500 leading-relaxed">
-                  {result.note} {result.honestLine}
-                </p>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* --- Bet Calculator --- */}
-      <BetCalculator calc={calc} setCalc={setCalc} />
-
-      {/* --- Next Draw card (chosen bet priced for the next draw + archive context) --- */}
-      <NextDrawCard number={calc.number} draws={draws} calc={calc} />
-
-      {/* --- Test My Numbers --- */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 md:p-6 shadow-xl space-y-4">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div>
-            <h2 className="text-xl font-bold text-white">Test My Numbers</h2>
-            <p className="text-xs text-slate-400 mt-1 leading-relaxed max-w-2xl">
-              Replays {result?.allocation?.length ? 'your allocated plan' : 'your entry list'} against the{' '}
-              {replayResult.drawsPlayed} loaded draws. This describes the past — it has no bearing on the next draw.
-            </p>
-          </div>
-          <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none">
-            <input type="checkbox" checked={replayExcludeSweep} onChange={(e) => setReplayExcludeSweep(e.target.checked)}
-              className="accent-emerald-500 w-4 h-4" />
-            Exclude sweep-day draws
-          </label>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-          <Stat label="Draws replayed" value={String(replayResult.drawsPlayed)} />
-          <Stat label="Total staked" value={money(replayResult.staked)} />
-          <Stat label="Total won" value={money(replayResult.won)} accent="text-emerald-300" />
-          <Stat label="Net result" value={money(replayResult.net)}
-            accent={replayResult.net >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
-          <Stat label="Historical RTP" value={replayResult.staked ? pct(replayResult.rtp, 1) : '—'}
-            sub="won ÷ staked" />
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-left text-slate-500 border-b border-slate-800">
-                <th className="py-1.5 pr-3 font-semibold">Number</th>
-                <th className="py-1.5 pr-3 font-semibold">Bet type</th>
-                <th className="py-1.5 pr-3 font-semibold text-right">Staked</th>
-                <th className="py-1.5 pr-3 font-semibold text-right">Won</th>
-                <th className="py-1.5 pr-3 font-semibold text-right">Net</th>
-                <th className="py-1.5 pr-3 font-semibold text-right">Hits</th>
-                <th className="py-1.5 font-semibold">Best hit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {replayResult.perEntry.map((e, i) => (
-                <tr key={i} className="border-b border-slate-800/50 text-slate-300">
-                  <td className="py-1.5 pr-3 font-mono tracking-wider text-white">{pad4(e.number)}</td>
-                  <td className="py-1.5 pr-3">
-                    {BET_TYPE_LABELS[e.betType]}
-                    {e.betType === 'roll' ? ` (${POSITION_LABELS[e.position ?? 0]})` : ''}
-                    {e.notOffered && (
-                      <span className="ml-1.5 text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/40 rounded px-1.5 py-0.5">
-                        not offered on this number (clause 2.5)
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-1.5 pr-3 text-right font-mono">{money(e.staked)}</td>
-                  <td className="py-1.5 pr-3 text-right font-mono">{money(e.won)}</td>
-                  <td className={`py-1.5 pr-3 text-right font-mono ${e.net >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{money(e.net)}</td>
-                  <td className="py-1.5 pr-3 text-right font-mono">{e.hitCount}</td>
-                  <td className="py-1.5 text-slate-400">
-                    {e.hits[0] ? <>#{e.hits[0].drawNo} · {money(e.hits[0].amount)}</> : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="text-[11px] text-slate-500 leading-relaxed">{replayResult.honestLine}</p>
-      </div>
-    </div>
+    <button type="button" onClick={onClick} title={title} aria-pressed={on || undefined}
+      className={`text-xs font-bold px-3 py-1.5 rounded-full border transition ${styles}`}>
+      {children}
+    </button>
   );
 }
 
-// The calculator: exact cost, prize table, EV/SD and probabilities for one
-// entry — every figure read from an engine function.
-function BetCalculator({ calc, setCalc }) {
-  const number = pad4(calc.number); // partial input prices its padded value ('567' -> '0567')
-  const position = Number(calc.position) || 0;
-  const entry = {
-    number,
-    betType: calc.betType,
-    pool: calc.pool,
-    stake: Math.max(1, Math.round(Number(calc.stake) || 1)),
-    position,
+function DigitInputs({ digits, setDigits }) {
+  const handle = (i, raw) => {
+    const d = raw.replace(/\D/g, '').slice(-1);
+    setDigits(ds => { const next = ds.slice(); next[i] = d; return next; });
+    if (d && i < 3) {
+      const el = document.getElementById(`planner-digit-${i + 1}`);
+      if (el) { el.focus(); el.select(); }
+    }
   };
-  const days = Math.max(1, Math.round(Number(calc.drawDays) || 1));
-  const cost = slipCost({ ...entry, drawDays: days });
-  const notOffered = cost === null;
-  const stats = notOffered ? null : portfolioStats([entry]);
-
-  const prizeTable = calc.betType === 'ibet' && ibetGroup(number) !== null
-    ? IBET_PRIZES[ibetGroup(number)][calc.pool]
-    : ORDINARY_PRIZES[calc.pool];
-
-  const tierNote = {
-    ordinary: 'Pays the published prize if your exact number places.',
-    system: 'Pays the Ordinary prize once per placing permutation.',
-    ibet: 'Pays the published iBet table when any permutation places.',
-    roll: 'Ten Ordinary entries — every digit at the chosen position.',
-  }[calc.betType];
-
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 md:p-6 shadow-xl space-y-5">
-      <div>
-        <h2 className="text-xl font-bold text-white">Bet Calculator</h2>
-        <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-          Exact pricing for a single slip — cost, full prize table, expected value and outcome swing.
-        </p>
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <NumberInput label="Number" value={calc.number} onChange={(v) => setCalc(c => ({ ...c, number: v }))} />
-        <Select label="Bet type" value={calc.betType} onChange={(v) => setCalc(c => ({ ...c, betType: v }))}
-          options={Object.entries(BET_TYPE_LABELS).map(([value, label]) => ({ value, label }))} />
-        <Select label="Pool" value={calc.pool} onChange={(v) => setCalc(c => ({ ...c, pool: v }))}
-          options={Object.entries(POOL_LABELS).map(([value, label]) => ({ value, label }))} />
-        <label className="block">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Stake ($/draw)</span>
-          <input type="number" min={1} step={1} value={calc.stake}
-            onChange={(e) => setCalc(c => ({ ...c, stake: e.target.value }))}
-            className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 font-mono text-sm text-white focus:outline-none focus:border-emerald-500" />
-        </label>
-        <label className="block">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Draws entered</span>
-          <input type="number" min={1} step={1} value={calc.drawDays}
-            onChange={(e) => setCalc(c => ({ ...c, drawDays: e.target.value }))}
-            className="mt-1 w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 font-mono text-sm text-white focus:outline-none focus:border-emerald-500" />
-        </label>
-      </div>
-
-      {calc.betType === 'roll' && (
-        <Select label="4D Roll position (the digit that varies)" value={calc.position}
-          onChange={(v) => setCalc(c => ({ ...c, position: v }))}
-          options={POSITION_LABELS.map((label, i) => ({ value: String(i), label: `${label} varies` }))} />
-      )}
-
-      {notOffered ? (
-        <div className="bg-rose-950/40 border border-rose-800/60 rounded-xl p-4 text-xs text-rose-200 leading-relaxed space-y-1">
-          <div className="font-bold text-rose-100">{BET_TYPE_LABELS[calc.betType]} is not offered on {number}.</div>
-          <div>{numberInsights(number, [FOURD_SEED_DRAWS[0]]).betAdvice}</div>
-          <div className="text-rose-300/80">Game rules clause 2.5: iBet and System Entry are unavailable on
-            single-permutation numbers (0000–9999). Bet it Ordinary instead.</div>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-            <Stat label="Slip cost" value={money(cost)} accent="text-emerald-300"
-              sub={`${entry.stake} × ${calc.drawDays} draw${Number(calc.drawDays) > 1 ? 's' : ''}${calc.betType === 'system' ? ` × ${permCount(number)} perms` : calc.betType === 'roll' ? ' × 10 numbers' : ''}`} />
-            <Stat label="Expected value" value={money(stats.ev)} sub="per draw" />
-            <Stat label="Outcome swing (SD)" value={money(stats.sd)} sub="per draw" />
-            <Stat label="Any-prize chance" value={pct(stats.pAnyPrize)} sub={`${stats.distinctNumbers} distinct numbers`} accent="text-sky-300" />
-            <Stat label="1st-prize chance" value="1 in 10,000" sub="same every draw" />
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-4">
-              <div className="text-xs font-bold text-slate-200">{BET_TYPE_LABELS[calc.betType]} prize table — {POOL_LABELS[calc.pool]} pool, {money(entry.stake)} stake</div>
-              <div className="text-[10px] text-slate-500 mt-0.5">{tierNote}</div>
-              <table className="w-full text-xs mt-2">
-                <tbody>
-                  {['first', 'second', 'third', 'starter', 'consolation'].map(tier => (
-                    <tr key={tier} className="border-b border-slate-800/50 last:border-0">
-                      <td className="py-1.5 text-slate-400">{TIER_LABELS[tier]}</td>
-                      <td className="py-1.5 text-right font-mono text-white">{money((prizeTable[tier] || 0) * entry.stake)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="space-y-3">
-              <RtpBanner ev={stats.ev} cost={cost / days} absoluteLoss={cost - stats.ev * days} />
-              {calc.betType === 'roll' && (
-                <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Numbers covered ({POSITION_LABELS[position]} varies)</div>
-                  <div className="flex flex-wrap gap-1.5 mt-1.5">
-                    {rollNumbers(number, position).map(n => (
-                      <span key={n} className="font-mono text-[11px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-1.5 py-0.5">{n}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {calc.betType === 'system' && (
-                <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
-                  <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Permutations covered ({permCount(number)})</div>
-                  <div className="flex flex-wrap gap-1.5 mt-1.5 max-h-24 overflow-y-auto">
-                    {permutationsOf(number).map(n => (
-                      <span key={n} className="font-mono text-[11px] bg-slate-800 text-slate-300 border border-slate-700 rounded px-1.5 py-0.5">{n}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {calc.betType === 'ibet' && (
-                <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3 text-[11px] text-slate-400 leading-relaxed">
-                  iBet prices {number} in the <span className="text-slate-200 font-semibold">{ibetGroup(number)}-permutation</span> group.
-                  The published table is not prize ÷ permutations — some groups round up. One iBet stake covers all{' '}
-                  {ibetGroup(number)} permutations.
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+    <div className="flex gap-2 mt-3">
+      {digits.map((d, i) => (
+        <input
+          key={i}
+          id={`planner-digit-${i}`}
+          value={d}
+          inputMode="numeric"
+          autoComplete="off"
+          aria-label={`Digit ${i + 1}`}
+          onChange={(e) => handle(i, e.target.value)}
+          onFocus={(e) => e.target.select()}
+          className={`w-14 h-16 text-center text-3xl font-extrabold bg-slate-950 border-[1.5px] rounded-xl text-slate-100 outline-none transition focus:border-emerald-500 focus:ring-[3px] focus:ring-emerald-500/20 ${d ? 'border-emerald-600' : 'border-slate-700'}`}
+        />
+      ))}
     </div>
   );
 }
@@ -585,90 +185,361 @@ function nextDrawDate(from = new Date()) {
   return null;
 }
 
-// Next Draw card: exact (memoryless) odds for the next draw, the chosen bet's
-// exact next-draw price (engine figures), and honest descriptive archive
-// context. No prediction — the odds are identical for every draw regardless
-// of history.
-function NextDrawCard({ number, draws, calc }) {
-  const n = pad4(number); // partial input reads as its padded value
-  const betType = calc?.betType || 'ordinary';
-  const pool = calc?.pool || 'big';
-  const stake = Math.max(1, Math.round(Number(calc?.stake) || 1));
-  const position = Number(calc?.position) || 0;
-  const probs = nextDrawProbabilities();
-  const insights = numberInsights(n, draws);
-  const expectedTxt = insights.expectedTimes < 0.1
-    ? insights.expectedTimes.toFixed(3)
-    : insights.expectedTimes.toFixed(2);
+function PlannerTab({ draws }) {
+  const [digits, setDigits] = useState(['8', '8', '8', '5']);
+  const [days, setDays] = useState(1);
+  const [legs, setLegs] = useState([
+    { type: 'ordinary', big: 2, small: 1 },
+    { type: 'ibet', big: 1, small: 0 },
+  ]);
+  const [budgetNote, setBudgetNote] = useState('');
+  const [addIbetAmt, setAddIbetAmt] = useState(null); // null = button hidden
+
+  // Partial input reads as its left-aligned digits (typing 8·8·8 prices 8880 —
+  // the mockup's pad-right behaviour); a hint says how many digits are missing.
+  const n = digits.map(d => d || '0').join('');
+  const missingDigits = digits.filter(d => d === '').length;
+
+  const legsKey = JSON.stringify(legs);
+  const summary = useMemo(
+    () => slipSummary({ number: n, legs, days }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [n, days, legsKey],
+  );
+  const activeLegs = legs.filter(l => !legNotOffered(l, n) && !legEmpty(l));
+  const replayResult = useMemo(
+    () => slipReplay({ number: n, legs, draws }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [n, legsKey, draws],
+  );
   const next = nextDrawDate();
 
-  // Exact next-draw price of the calculator's chosen bet — same engine
-  // functions the calculator uses (clause 2.5: slipCost is null for iBet /
-  // System on one-perm numbers, and the card says so instead of quoting EV).
-  const costNext = slipCost({ betType, number: n, stake, drawDays: 1 });
-  const notOffered = costNext === null;
-  const nextStats = notOffered
-    ? null
-    : portfolioStats([{ number: n, betType, pool, stake, position }]);
+  // A raised add-iBet offer was priced for the number it was raised on — drop
+  // it when the digits change (on a one-perm number the offer is unplaceable).
+  useEffect(() => { setAddIbetAmt(null); }, [n]);
+
+  const setPool = (i, pool, raw) => setLegs(ls => ls.map((l, j) => j === i
+    ? { ...l, [pool]: Math.max(0, Math.floor(Number(raw) || 0)) }
+    : l));
+  const removeLeg = (i) => setLegs(ls => ls.filter((_, j) => j !== i));
+  const addLeg = () => setLegs(ls => {
+    const have = new Set(ls.map(l => l.type));
+    return [...ls, { type: LEG_TYPES.find(t => !have.has(t)) || 'ordinary', big: 1, small: 0 }];
+  });
+
+  // Budget rebalance — moves the SAME money across the legs' Big/Small pools;
+  // bet types are never changed (ratified points 4 + 7: no silent switching).
+  const rebalance = (mode) => {
+    setAddIbetAmt(null);
+    const active = legs.filter(l => !legNotOffered(l, n) && !legEmpty(l));
+    const total = active.reduce((a, l) => a + (Number(l.big) || 0) + (Number(l.small) || 0), 0);
+    if (total === 0) { setBudgetNote('No money to rebalance — set an amount on a bet first.'); return; }
+    setBudgetNote('');
+    if (mode === 'odds') {
+      const ibet = legs.find(l => l.type === 'ibet' && !legNotOffered(l, n));
+      if (!ibet && legNotOffered({ type: 'ibet' }, n)) {
+        setBudgetNote(`iBet isn't offered on ${n} (rule 2.5 — one arrangement). Your bets stay as they are.`);
+      } else if (!ibet) {
+        setAddIbetAmt(total);
+        setBudgetNote(`Your ${money(total)} covers the most prize places as iBet — it sweeps every arrangement of ${n} in one bet. Add it below, or keep your current bets.`);
+      } else {
+        setLegs(ls => {
+          const ibetIdx = ls.findIndex(l => l.type === 'ibet' && !legNotOffered(l, n));
+          return ls.map((l, j) => (j === ibetIdx ? { ...l, big: total, small: 0 } : { ...l, big: 0, small: 0 }));
+        });
+        setBudgetNote(`Moved all ${money(total)} into the iBet bet — most prize places per dollar. Other bets zeroed (not removed).`);
+      }
+    } else if (mode === 'swing') {
+      setLegs(ls => ls.map(l => ({ ...l, big: 0, small: (Number(l.big) || 0) + (Number(l.small) || 0) })));
+      setBudgetNote(`All ${money(total)} moved to Small — top-3 only, biggest prizes, highest swing.`);
+    } else if (mode === 'smooth') {
+      setLegs(ls => ls.map(l => ({ ...l, big: (Number(l.big) || 0) + (Number(l.small) || 0), small: 0 })));
+      setBudgetNote(`All ${money(total)} moved to Big — 23 prize places, small wins land more often.`);
+    } else {
+      setLegs(ls => ls.map(l => {
+        const t = (Number(l.big) || 0) + (Number(l.small) || 0);
+        const b = Math.round(t * 2 / 3);
+        return { ...l, big: b, small: t - b };
+      }));
+      setBudgetNote('Split 2:1 Big:Small within each bet — frequent places plus a bigger top-3.');
+    }
+  };
+
+  const hasActive = activeLegs.length > 0;
+  const costLabel = summary.cost === 0
+    ? '$0'
+    : money(summary.cost) + (days > 1 ? ` (${days} draws)` : '');
+  const upToLabel = summary.costPerDraw === 0 ? '—' : `up to ${money(summary.upTo)}`;
+  const anyPct = summary.distinctNumbers > 0 && summary.costPerDraw > 0
+    ? `${(summary.pAnyPrize * 100).toFixed(2).replace(/\.?0+$/, '')}%`
+    : '—';
+  const firstChance = summary.distinctNumbers > 0 && summary.costPerDraw > 0
+    ? `1-in-${Math.round(NUMBER_SPACE / summary.distinctNumbers).toLocaleString('en-SG')}`
+    : '—';
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 md:p-6 shadow-xl space-y-4">
-      <div className="flex items-center gap-3 flex-wrap">
-        <h2 className="text-xl font-bold text-white">Next Draw — {n}</h2>
-        <span className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded-full font-semibold">
-          exact odds · identical every draw
+    <div className="max-w-[30rem] mx-auto space-y-5 animate-in fade-in duration-300">
+
+      {/* header */}
+      <div>
+        <span className="inline-block bg-amber-500/10 text-amber-300 border border-amber-700/60 text-[10px] font-extrabold tracking-[0.1em] uppercase px-2.5 py-1 rounded-full">
+          Bet &amp; Planner · v2.1
         </span>
+        <h1 className="text-2xl font-extrabold text-white mt-2">One number · every bet on it</h1>
+        <p className="text-slate-400 text-sm leading-relaxed mt-1">
+          Stack as many bet types as you like on the same 4 digits — <b className="text-sky-300">Big</b> and{' '}
+          <b className="text-pink-300">Small</b> amounts per bet. Everything below is computed from the{' '}
+          <b>combined slip</b>, and the budget mirrors your bets live.
+        </p>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <Stat label="1st prize" value="1 in 10,000" sub={pct(probs.first, 4)} />
-        <Stat label="Top 3 prizes" value="3 in 10,000" sub={pct(probs.top3, 4)} />
-        <Stat label="Any prize (Big)" value="23 in 10,000" sub={pct(probs.anyBig)} accent="text-sky-300" />
-        <Stat label="Any prize (Small)" value="3 in 10,000" sub={pct(probs.anySmall, 4)} />
-      </div>
-
-      <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-4 space-y-2 text-xs leading-relaxed">
-        <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Your bet on the next draw</div>
-        {next && (
-          <div className="text-slate-300">
-            Draws run <span className="text-slate-200 font-semibold">Wed · Sat · Sun</span> — next draw day{' '}
-            <span className="text-slate-200 font-semibold">{next.label}</span>{next.today ? ' (today)' : ''}.
-            {next.sweep && (
-              <> <span className="text-amber-300 font-semibold">It's a Singapore Sweep day</span> — 4D results will be
-              the last 4 digits of Sweep prizes, and the draw is excluded from fairness statistics.</>
-            )}
-          </div>
+      {/* THE NUMBER */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+        <h2 className="text-base font-bold text-white">Your number</h2>
+        <DigitInputs digits={digits} setDigits={setDigits} />
+        {missingDigits > 0 && (
+          <p className="text-[11px] text-amber-300/90 mt-2">
+            Pricing <span className="font-mono font-bold">{n}</span> — add {missingDigits} more digit{missingDigits === 1 ? '' : 's'}
+          </p>
         )}
-        {notOffered ? (
-          <div className="text-amber-300/90">
-            {BET_TYPE_LABELS[betType]} is not offered on {n} (clause 2.5 — one-permutation number); price it
-            Ordinary in the calculator above.
+        <div className="flex items-center gap-1.5 flex-wrap mt-3">
+          <span className="text-[10px] text-slate-500 font-bold tracking-wider uppercase">Enter for</span>
+          {[1, 3, 5].map(d => (
+            <Chip key={d} on={days === d} onClick={() => setDays(d)}>{d} draw{d > 1 ? 's' : ''}</Chip>
+          ))}
+        </div>
+      </div>
+
+      {/* THE BETS (legs) */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+        <h2 className="text-base font-bold text-white">Bets on this number</h2>
+        <p className="text-slate-500 text-xs leading-relaxed mt-0.5">
+          Mix bet types freely — e.g. $1 Big Ordinary <i>and</i> $1 Big iBet. Each bet's cost adds up; the
+          chances below combine without double-counting.
+        </p>
+
+        <div className="space-y-2.5 mt-3">
+          {legs.map((leg, i) => {
+            const notOffered = legNotOffered(leg, n);
+            const empty = legEmpty(leg);
+            const perms = permCount(n);
+            let note;
+            if (notOffered) {
+              note = <span>Not offered — <b className="text-slate-200">{n}</b> has one arrangement (rule 2.5). Costs $0 until you switch this bet to Ordinary or Roll.</span>;
+            } else if (empty) {
+              note = <span>Empty — set a Big or Small amount, or remove this bet.</span>;
+            } else if (leg.type === 'system') {
+              note = <span>Plays <b className="text-slate-200">all {perms} arrangements</b> at the Ordinary table · cost ×{perms}.</span>;
+            } else if (leg.type === 'ibet') {
+              note = <span>One bet covers <b className="text-slate-200">all {perms} arrangements</b> · published {perms}-perm group prizes.</span>;
+            } else if (leg.type === 'roll') {
+              note = <span>Covers <b className="text-slate-200">10 numbers</b> (rolling 4th digit) · each plays the Ordinary table.</span>;
+            } else {
+              note = <span>Straight bet on <b className="text-slate-200">{n}</b> · Big pays 23 places, Small the top 3.</span>;
+            }
+            return (
+              <div key={i}
+                className={`border rounded-xl p-3 bg-slate-950/50 ${i === 0 ? 'border-emerald-800' : 'border-slate-800'} ${notOffered ? 'border-amber-700' : ''}`}>
+                <div className="flex items-center gap-2">
+                  <select value={leg.type} aria-label={`Bet ${i + 1} type`}
+                    onChange={(e) => setLegs(ls => ls.map((l, j) => j === i ? { ...l, type: e.target.value } : l))}
+                    className="bg-slate-900 border border-slate-700 text-slate-100 text-xs font-extrabold px-2 py-1.5 rounded-lg focus:outline-none focus:border-emerald-500">
+                    {LEG_TYPES.map(t => <option key={t} value={t}>{BET_TYPE_LABELS[t]}</option>)}
+                  </select>
+                  {legs.length > 1 && (
+                    <button onClick={() => removeLeg(i)} title="Remove bet" aria-label={`Remove bet ${i + 1}`}
+                      className="ml-auto text-slate-500 hover:text-rose-400 text-sm px-1.5 py-0.5 transition">✕</button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div className="border border-slate-800 border-l-[3px] border-l-sky-400 rounded-lg px-2.5 py-2">
+                    <div className="text-[10px] font-extrabold tracking-wider uppercase text-sky-300">Big $</div>
+                    <input type="number" min="0" step="1" value={leg.big} aria-label={`Bet ${i + 1} Big amount`}
+                      onChange={(e) => setPool(i, 'big', e.target.value)}
+                      className="w-full bg-slate-950 border-[1.5px] border-slate-700 rounded-md text-slate-100 text-base font-extrabold px-1.5 py-1 mt-1 outline-none focus:border-emerald-500" />
+                  </div>
+                  <div className="border border-slate-800 border-l-[3px] border-l-pink-400 rounded-lg px-2.5 py-2">
+                    <div className="text-[10px] font-extrabold tracking-wider uppercase text-pink-300">Small $</div>
+                    <input type="number" min="0" step="1" value={leg.small} aria-label={`Bet ${i + 1} Small amount`}
+                      onChange={(e) => setPool(i, 'small', e.target.value)}
+                      className="w-full bg-slate-950 border-[1.5px] border-slate-700 rounded-md text-slate-100 text-base font-extrabold px-1.5 py-1 mt-1 outline-none focus:border-emerald-500" />
+                  </div>
+                </div>
+                <p className={`text-[11px] leading-relaxed mt-2 ${notOffered ? 'text-amber-300' : empty ? 'text-slate-400' : 'text-slate-300'}`}>
+                  {note}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-3">
+          <Chip add onClick={addLeg}>＋ add a bet type</Chip>
+        </div>
+      </div>
+
+      {/* COMBINED SUMMARY (merged: price + up-to + next draw + honest line) */}
+      <div className="bg-gradient-to-br from-emerald-950 to-slate-900 border border-emerald-800 rounded-2xl p-4 shadow-xl">
+        <div className="flex justify-between items-baseline gap-2">
+          <span className="text-[11px] font-extrabold tracking-wider uppercase text-emerald-300">This slip</span>
+          <span className="text-2xl font-extrabold text-emerald-300 text-right">{costLabel}</span>
+        </div>
+        <div className="flex justify-between items-baseline gap-2 mt-1">
+          <span className="text-[11px] text-slate-400">
+            next draw · <b className="text-emerald-300">{next ? next.label : '—'}</b>
+            {next?.sweep && <span className="text-amber-300 font-semibold"> · sweep day</span>}
+          </span>
+          <span className="text-base font-extrabold text-emerald-200 text-right">{upToLabel}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2 mt-3">
+          <div className="bg-slate-950/50 border border-emerald-800/30 rounded-xl px-3 py-2">
+            <div className="text-base font-extrabold text-slate-100">{anyPct}</div>
+            <div className="text-[10px] font-bold tracking-wider uppercase text-slate-500 mt-0.5">any-prize chance</div>
+            <div className="text-[10px] text-slate-600">
+              covers {summary.distinctNumbers} number{summary.distinctNumbers === 1 ? '' : 's'} · per draw
+            </div>
           </div>
+          <div className="bg-slate-950/50 border border-emerald-800/30 rounded-xl px-3 py-2">
+            <div className="text-base font-extrabold text-slate-100">{firstChance}</div>
+            <div className="text-[10px] font-bold tracking-wider uppercase text-slate-500 mt-0.5">1st-prize chance</div>
+            <div className="text-[10px] text-slate-600">same every draw</div>
+          </div>
+        </div>
+        <div className="mt-3 border-t border-emerald-800/30 pt-3 text-xs leading-relaxed text-slate-400">
+          {summary.costPerDraw === 0 || summary.rtp === null
+            ? <>Fixed odds: <b className="text-slate-200">Big returns 65.9¢ per $1 · Small 58.0¢</b> — on average, whatever you bet.</>
+            : <>Honest price: every $1 here returns about <b className="text-slate-200">{(summary.rtp * 100).toFixed(1)}¢</b> on
+              average (Big 65.9¢ / Small 58.0¢). Expected loss ≈ <b className="text-slate-200">{money(summary.expectedLoss)}</b> on
+              this slip — <b className="text-slate-200">no bet changes it</b>.</>}
+        </div>
+      </div>
+
+      {/* WHAT EACH BET PAYS */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+        <h2 className="text-base font-bold text-white">
+          What each bet pays <span className="text-slate-500 font-semibold text-xs">— per draw, if the number places</span>
+        </h2>
+        {activeLegs.length === 0 ? (
+          <p className="text-xs text-slate-500 mt-3">No active bets — add an amount above.</p>
         ) : (
-          <div className="text-slate-300">
-            A {POOL_LABELS[pool]}-pool {BET_TYPE_LABELS[betType]} on {n} at {money(stake)} per draw costs{' '}
-            <span className="font-mono">{money(nextStats.cost)}</span> next draw and returns{' '}
-            <span className="font-mono">{money(nextStats.ev)}</span> on average — the same fixed odds as every
-            draw, whatever the history says.
+          <div className="mt-1">
+            {legs.map((leg, i) => {
+              if (legNotOffered(leg, n) || legEmpty(leg)) return null;
+              const rows = legPayoutTable(leg, n);
+              const cost = legCostPerDraw(leg, n);
+              const suffix = leg.type === 'system' ? ` · ×${permCount(n)} arrangements`
+                : leg.type === 'roll' ? ' · ×10 numbers' : '';
+              return (
+                <div key={i} className="mt-4 first:mt-2">
+                  <h3 className="text-sm font-bold text-slate-200">
+                    Bet {i + 1} · {BET_TYPE_LABELS[leg.type]}{' '}
+                    <span className="text-slate-500 font-semibold">· {money(cost)} per draw{suffix}</span>
+                  </h3>
+                  <table className="w-full text-xs mt-1.5">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-slate-400">
+                        <th className="text-left py-1.5 font-extrabold tracking-wider uppercase text-[10px]">Prize</th>
+                        <th className="text-right py-1.5 font-extrabold tracking-wider uppercase text-[10px] text-sky-300">Big win</th>
+                        <th className="text-right py-1.5 font-extrabold tracking-wider uppercase text-[10px] text-pink-300">Small win</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(r => (
+                        <tr key={r.label} className="border-b border-slate-800/50 last:border-0">
+                          <td className="py-1.5 text-slate-400 text-[11px] font-semibold">{r.label}</td>
+                          <td className={`py-1.5 text-right font-mono font-bold ${leg.big > 0 && r.big != null ? 'text-sky-300' : 'text-slate-700'}`}>
+                            {leg.big > 0 && r.big != null ? money(r.big * leg.big) : '—'}
+                          </td>
+                          <td className={`py-1.5 text-right font-mono font-bold ${leg.small > 0 && r.small != null ? 'text-pink-300' : 'text-slate-700'}`}>
+                            {leg.small > 0 && r.small != null ? money(r.small * leg.small) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {leg.type === 'system' && (
+                    <p className="text-[11px] text-slate-500 leading-relaxed mt-1">
+                      Shown per arrangement-placing-1st: any one arrangement taking a tier pays the amount above.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
 
-      <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-4 space-y-2 text-xs leading-relaxed">
-        <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Archive context — descriptive, not predictive</div>
-        <div className="text-slate-300">
-          {n} has appeared <span className="font-bold text-white">{insights.timesSeen}×</span> in the{' '}
-          {insights.drawsAnalyzed} loaded non-sweep draws. Chance expectation over that many draws is ≈{' '}
-          <span className="font-mono">{expectedTxt}</span> appearances — small counts are the norm, not a signal.
+      {/* REPLAY */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+        <h2 className="text-base font-bold text-white">How this slip has done</h2>
+        <p className="text-slate-500 text-xs leading-relaxed mt-0.5">
+          All bets combined, replayed automatically against our archive{days > 1 ? ' — per-draw stakes' : ''}.
+        </p>
+        <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3.5 mt-3">
+          <div className="flex justify-between items-baseline gap-2">
+            <span className="text-[11px] font-extrabold tracking-wider uppercase text-slate-500">
+              {replayResult.drawsPlayed} archived draws
+            </span>
+            <span className={`text-lg font-extrabold ${!hasActive ? 'text-slate-700' : replayResult.net < 0 ? 'text-rose-400' : 'text-emerald-300'}`}>
+              {!hasActive ? '—' : (replayResult.net < 0 ? '–' : '+') + money(Math.abs(replayResult.net))}
+            </span>
+          </div>
+          <div className="text-xs text-slate-400 leading-relaxed mt-1 border-t border-slate-800/60 pt-2">
+            {hasActive
+              ? <>staked <b className="text-slate-200">{money(replayResult.staked)}</b>{' '}
+                ({money(replayResult.staked / replayResult.drawsPlayed)} × {replayResult.drawsPlayed}), would have
+                won <b className="text-slate-200">{money(replayResult.won)}</b>.</>
+              : 'Add an active bet to see the replay.'}
+          </div>
         </div>
-        <div className="text-slate-400">
-          {insights.lastSeenDrawNo !== null
-            ? <>Last seen in <span className="text-slate-200 font-semibold">draw {insights.lastSeenDrawNo}</span> ({insights.lastSeenGap === 0 ? 'the newest draw' : `${insights.lastSeenGap} draw${insights.lastSeenGap === 1 ? '' : 's'} ago`}).</>
-            : 'Not among the loaded draws.'}
-          {' '}Draws are independent — a long gap changes nothing about the next draw.
-        </div>
-        <div className="text-slate-400 border-t border-slate-800/60 pt-2">{insights.betAdvice}</div>
+        {hasActive && (
+          replayResult.perDraw.length ? (
+            <div className="flex flex-wrap gap-1.5 mt-3">
+              {replayResult.perDraw.slice(0, 12).map(h => (
+                <span key={h.drawNo} className="text-[11px] font-bold border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 px-2.5 py-1 rounded-full">
+                  #{h.drawNo} · {money(h.won)}
+                </span>
+              ))}
+              {replayResult.perDraw.length > 12 && (
+                <span className="text-[11px] text-slate-500 self-center">+{replayResult.perDraw.length - 12} more winning draws</span>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500 mt-3">
+              No wins in the archive — typical: most slips don't hit. The archive grows to ~470 draws automatically.
+            </p>
+          )
+        )}
+        <p className="text-[11px] text-slate-500 leading-relaxed mt-3">{replayResult.honestLine}</p>
       </div>
+
+      {/* BUDGET CHECK */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+        <h2 className="text-base font-bold text-white">Budget check</h2>
+        <p className="text-slate-500 text-xs leading-relaxed mt-0.5">
+          Mirrors your bets automatically — currently{' '}
+          <b className="text-emerald-300">{money(summary.costPerDraw)} per draw</b>. Pick a style to rebalance
+          the same money across your bets (bet types are never changed for you).
+        </p>
+        <div className="flex flex-wrap gap-1.5 mt-3">
+          {STYLE_CHIPS.map(c => (
+            <Chip key={c.id} onClick={() => rebalance(c.id)}>{c.label}</Chip>
+          ))}
+        </div>
+        {budgetNote && <p className="text-xs text-slate-400 leading-relaxed mt-3">{budgetNote}</p>}
+        {addIbetAmt != null && (
+          <button
+            onClick={() => { setLegs(ls => [...ls, { type: 'ibet', big: addIbetAmt, small: 0 }]); setAddIbetAmt(null); setBudgetNote('iBet bet added — amounts updated above.'); }}
+            className="mt-3 text-xs font-bold text-emerald-300 border border-dashed border-emerald-800 bg-slate-950/60 hover:bg-emerald-900/30 px-3 py-1.5 rounded-full transition">
+            ＋ add an iBet bet at ${addIbetAmt}
+          </button>
+        )}
+      </div>
+
+      {/* post-v1 placeholder */}
+      <div className="border border-dashed border-slate-800 rounded-xl px-3 py-3 text-center text-xs text-slate-600">
+        ＋ add another number — each number gets its own bets &amp; results (v2)
+      </div>
+
     </div>
   );
 }

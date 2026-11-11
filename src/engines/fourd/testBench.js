@@ -44,6 +44,9 @@ export function replay({ entries, draws, excludeSweep = false }) {
       hitCount: hits.length,
       hitRate: rows.length ? hits.length / rows.length : 0,
       hits: hits.slice(0, 20), // cap for display; counts above stay exact
+      // Uncapped list for engine consumers that aggregate per-draw winnings
+      // (slipReplay merges legs); the display cap above must not truncate them.
+      allHits: hits,
     };
   });
 

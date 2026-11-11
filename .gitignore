@@ -6,6 +6,8 @@ dist
 # Local working files — never ship
 HANDOFF.md
 HANDOFF.md.backup-*
+AGENTS.md
+AGENTS.md.backup-*
 .claude/
 /4d_official.csv
 /4d_official.json

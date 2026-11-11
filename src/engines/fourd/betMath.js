@@ -227,6 +227,18 @@ export function standardDeviation(betType, pool = 'big', permGroup = null) {
 
 // ---------- portfolio summary ----------
 
+// The distinct numbers one entry actually covers (drives P(any prize) and the
+// replay/plan never-duplicate guards): ordinary covers its single number;
+// system and iBet cover every permutation; roll covers its 10 positional
+// numbers. Shared by portfolioStats, budgetPlanner.plan and slip.js so the
+// coverage definition exists in exactly one place.
+export function coveredNumbers(entry) {
+  const n = String(entry.number).padStart(4, '0');
+  if (entry.betType === 'roll') return rollNumbers(n, entry.position ?? 0);
+  if (entry.betType === 'ordinary') return [n];
+  return permutationsOf(n);
+}
+
 // Aggregate stats for a list of entries: [{ betType, number, stake, pool }].
 // P(any prize) uses the distinct-number union; EV/variance add per entry
 // (entries are independent across positions within a draw).
@@ -255,13 +267,7 @@ export function portfolioStats(entries) {
     varianceSum += variance(e.betType === 'ibet' ? 'ibet' : 'ordinary', e.pool, group)
       * stake * stake * units;
     cost += slipCost(e) ?? 0;
-    // Distinct numbers the entry actually covers (drives P(any prize)):
-    // ordinary covers its single number; system and iBet cover every
-    // permutation; roll covers its 10 positional numbers.
-    const covered = e.betType === 'roll' ? rollNumbers(e.number, e.position ?? 0)
-      : e.betType === 'ordinary' ? [String(e.number).padStart(4, '0')]
-      : permutationsOf(e.number);
-    covered.forEach(n => numbers.add(n));
+    coveredNumbers(e).forEach(n => numbers.add(n));
   }
   return {
     cost,
